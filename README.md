@@ -78,6 +78,10 @@ Contextory 是一个面向个人使用的 macOS Finder 右键新建文件工具�
 
 通过 Dock 或状态栏执行“退出”会暂停 Finder 菜单并阻止扩展重新拉起宿主；扩展进程可能仍由 macOS 暂时保留，但不会继续提供动作。再次手动打开右键助手会恢复菜单。异常崩溃不写入主动退出状态，扩展仍可自动恢复宿主。
 
+宿主由 Launch Services 强制保持单实例。Finder 扩展初始化和 Finder 重启不会抢先启动宿主；只有用户手动打开、登录启动或实际点击文件动作时才会按需启动。主动退出后的首次手动打开会立即显示设置窗口。
+
+关闭设置窗口时，右键助手会在 AppKit 窗口动画结束后释放 SwiftUI 界面资源，再回到轻量菜单栏模式；关闭窗口不会退出 Finder 动作宿主。
+
 ## 设置功能
 
 - 概览：Finder Extension 状态、登录时启动、后台静默启动、成功提示。
@@ -128,6 +132,21 @@ swift test
 - `build/右键助手.app`
 - `build/Contextory.zip`
 - `build/Contextory.dmg`
+
+### GitHub Actions 自动发布
+
+仓库内置 `.github/workflows/release.yml`。推送与 `VERSION` 一致的版本标签时，GitHub Actions 会在 Apple Silicon macOS runner 上自动运行测试、构建并校验产物，然后创建 GitHub Release，上传 DMG、ZIP 与 SHA-256 校验文件。
+
+发布 1.0.0：
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+也可以在仓库的 Actions 页面手动运行“构建与发布”；手动运行只生成保留 30 天的 Actions Artifact，不会创建或覆盖 Release。
+
+CI 产物采用 Ad-hoc 签名且未经 Apple 公证，适合作为自用备份。首次安装仍可能需要在“系统设置 → 隐私与安全性”中手动允许。
 
 ### 可选：Developer ID 签名与公证
 

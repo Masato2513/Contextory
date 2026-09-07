@@ -151,11 +151,9 @@ class FinderSync: FIFinderSync {
         // 3. 在插件进程中初始化固定的新建文件动作集。
         DefaultActionRegistry.registerAll()
 
-        // 4. 主 App 是状态栏图标、输入弹窗与设置面板的唯一宿主。
-        //    用户若曾强退主 App，菜单栏图标会消失；这里在 Extension 初始化时拉一次，
-        //    让"重启 Finder / 重新进入受监控目录"就能把图标找回来，
-        //    无需用户手动去 Launchpad 启动。
-        Self.ensureHostRunning()
+        // 不在扩展初始化阶段主动拉起宿主：Finder 重载与用户双击可能同时发生，
+        // 两条 Launch Services 请求竞态会造成重复宿主。宿主由手动/登录启动，
+        // 或在用户真正点击动作后按需恢复。
     }
 
     deinit {
@@ -176,6 +174,8 @@ class FinderSync: FIFinderSync {
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: hostBundleID) else { return }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.addsToRecentItems = false
+        configuration.createsNewApplicationInstance = false
+        configuration.allowsRunningApplicationSubstitution = true
         // activates 默认为 true 会抢焦点；主 App 是 .accessory，不会有窗口跳出，但还是显式关掉更稳。
         configuration.activates = false
         configuration.arguments = [LaunchPresentationPolicy.backgroundLaunchArgument]

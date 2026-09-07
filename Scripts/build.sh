@@ -126,6 +126,8 @@ cat <<EOF > "$APP_BUNDLE/Contents/Info.plist"
     <string>NSApplication</string>
     <key>LSUIElement</key>
     <true/>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
 </dict>
@@ -381,14 +383,17 @@ if [ ! -f "$RAW_DMG" ]; then
     exit 1
 fi
 
-# C. 静默挂载原始 DMG 以便调用 AppleScript 写入 Finder 窗口对称排版元数据
-echo "🎨 [Build] 静默挂载临时磁盘映像并启动 Finder 视觉排版排布..."
-# 使用 -nobrowse 避免在用户桌面弹出影响体验
-device=$(hdiutil attach -nobrowse -readwrite "$RAW_DMG" | egrep '/Volumes/' | awk '{print $1}')
-sleep 1.5
+# C. 本机构建时挂载原始 DMG，通过 Finder 写入窗口排版元数据。
+# GitHub Actions 没有可交互 Finder 会话，CI 直接保留系统默认布局，避免 AppleScript 超时。
+if [ "${CI:-false}" = "true" ]; then
+    echo "🎨 [Build] CI 环境跳过 Finder 窗口排版，使用系统默认 DMG 布局。"
+else
+    echo "🎨 [Build] 静默挂载临时磁盘映像并启动 Finder 视觉排版排布..."
+    # 使用 -nobrowse 避免在用户桌面弹出影响体验
+    device=$(hdiutil attach -nobrowse -readwrite "$RAW_DMG" | egrep '/Volumes/' | awk '{print $1}')
+    sleep 1.5
 
-# 使用 AppleScript 让 Finder 调整该虚拟盘的布局元数据。添加 Headless 降级保护
-osascript <<EOF || echo "⚠️ [Build] 提示: 当前处于 headless 无显示环境，已安全跳过 Finder UI 窗口排版，默认继承系统基础布局。"
+    osascript <<EOF || echo "⚠️ [Build] Finder UI 排版失败，默认继承系统基础布局。"
 tell application "Finder"
     tell disk "$VOLUME_NAME"
         open
@@ -412,9 +417,10 @@ tell application "Finder"
 end tell
 EOF
 
-sleep 1
-hdiutil detach "$device" >/dev/null || true
-sleep 1
+    sleep 1
+    hdiutil detach "$device" >/dev/null || true
+    sleep 1
+fi
 
 # D. 转换为正式发布版只读高压缩 DMG (UDZO 格式)
 FINAL_DMG="$BUILD_DIR/Contextory.dmg"

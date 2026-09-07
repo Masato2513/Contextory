@@ -13,6 +13,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private var statusItem: NSStatusItem?
     /// 权限刷新会先启动新实例再结束旧实例，不能被当成用户主动退出。
     private var isTerminatingForRelaunch = false
+    /// 主动退出后的首次手动打开必须立即给出 UI 反馈，不再受静默启动偏好影响。
+    private var shouldPresentSettingsImmediately = false
+    /// 窗口关闭与 Dock 身份切换都由 AppKit 动画驱动，延迟释放可避免在动画事务中销毁视图树。
+    private var pendingWindowRelease: DispatchWorkItem?
     /// 替换旧的 objc_sync_enter(self)：
     /// - 旧实现把锁加在 NSObject self 上，和 AppKit 内部隐式锁高度耦合，
     ///   debug 时一旦死锁，spindump 几乎看不到哪一处先持有；
@@ -141,6 +145,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
     
     func applicationWillTerminate(_ aNotification: Notification) {
+        pendingWindowRelease?.cancel()
         folderMonitor?.stop()
     }
 
@@ -178,6 +183,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             storage.writeLog("[App] 无法清除主动退出状态", level: .error)
             return false
         }
+        shouldPresentSettingsImmediately = true
         SystemReloader.postConfigChanged()
         storage.writeLog("[App] 检测到手动启动，Finder 右键菜单已恢复")
         return true
@@ -308,6 +314,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
 
     private func showSettingsWindowIfNeededForLaunch() {
+        if shouldPresentSettingsImmediately {
+            shouldPresentSettingsImmediately = false
+            showSettingsWindow()
+            return
+        }
+
         evaluateLaunchPresentation()
 
         // LSUIElement app 在 didFinishLaunching 时可能还没来得及成为 active/frontmost。
@@ -361,6 +373,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
     
     @objc private func showSettingsWindow() {
+        // 用户可能在关闭动画尚未结束时重新打开；此时继续复用原窗口，取消延迟回收。
+        pendingWindowRelease?.cancel()
+        pendingWindowRelease = nil
+
         // 设置页可见期间恢复标准 App 身份：展示 Dock 图标，并提供系统级退出入口。
         let settingsWindow = window ?? makeSettingsWindow()
         NSApp.setActivationPolicy(.regular)
@@ -438,14 +454,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         guard let closingWindow = notification.object as? NSWindow,
               closingWindow === window else { return }
 
-        // 先断开 HostingView，再释放 NSWindow，确保 SwiftUI 状态、图层与订阅退出常驻集。
-        closingWindow.contentView = nil
-        window = nil
-        // 关闭设置只退出前台界面，不终止动作宿主；后台恢复为无 Dock 图标的状态栏 App。
-        NSApp.setActivationPolicy(.accessory)
-        SharedStorageManager.shared.writeLog(
-            "[App] 设置窗口已关闭并释放，宿主继续以轻量菜单栏模式运行"
-        )
+        pendingWindowRelease?.cancel()
+
+        // windowWillClose 发生时 AppKit 的窗口/Dock 动画事务仍可能持有窗口图层。
+        // 当前 runloop 只切回菜单栏身份，再给 AppKit 一个完整动画周期后释放 SwiftUI 视图树；
+        // 否则在 _NSWindowTransformAnimation dealloc 阶段清空 contentView 可能触发野指针。
+        let releaseWork = DispatchWorkItem { [weak self, weak closingWindow] in
+            guard let self,
+                  let closingWindow,
+                  self.window === closingWindow,
+                  !closingWindow.isVisible else { return }
+
+            closingWindow.delegate = nil
+            closingWindow.contentView = nil
+            self.window = nil
+            self.pendingWindowRelease = nil
+            SharedStorageManager.shared.writeLog(
+                "[App] 设置窗口已安全释放，宿主继续以轻量菜单栏模式运行"
+            )
+        }
+        pendingWindowRelease = releaseWork
+
+        DispatchQueue.main.async { [weak self, weak closingWindow] in
+            guard let self,
+                  let closingWindow,
+                  self.window === closingWindow,
+                  !closingWindow.isVisible else { return }
+
+            NSApp.setActivationPolicy(.accessory)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: releaseWork)
+        }
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

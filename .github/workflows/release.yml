@@ -1,0 +1,90 @@
+name: 构建与发布
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: contextory-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 构建 arm64 安装包
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v6
+
+      - name: 校验版本号
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [[ "${tag_version}" != "${version}" ]]; then
+              echo "标签版本 ${tag_version} 与 VERSION ${version} 不一致"
+              exit 1
+            fi
+          fi
+          echo "BUILD_VERSION=${version}" >> "${GITHUB_ENV}"
+
+      - name: 运行测试
+        run: swift test
+
+      - name: 构建应用与安装包
+        env:
+          CI: "true"
+          DISTRIBUTION_ROUTE: website-dev
+          VERSION_OVERRIDE: ${{ env.BUILD_VERSION }}
+        run: ./Scripts/build.sh
+
+      - name: 校验构建产物
+        shell: bash
+        run: |
+          test "$(lipo -archs 'build/右键助手.app/Contents/MacOS/Contextory')" = "arm64"
+          test "$(lipo -archs 'build/右键助手.app/Contents/PlugIns/ContextoryFinderExtension.appex/Contents/MacOS/ContextoryFinderExtension')" = "arm64"
+          codesign --verify --deep --strict --verbose=2 "build/右键助手.app"
+          hdiutil verify "build/Contextory.dmg"
+          cd build
+          shasum -a 256 Contextory.dmg Contextory.zip > SHA256SUMS.txt
+
+      - name: 上传 Actions 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: Contextory-${{ env.BUILD_VERSION }}-arm64
+          path: |
+            build/Contextory.dmg
+            build/Contextory.zip
+            build/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 创建 GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" \
+              build/Contextory.dmg \
+              build/Contextory.zip \
+              build/SHA256SUMS.txt \
+              --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              build/Contextory.dmg \
+              build/Contextory.zip \
+              build/SHA256SUMS.txt \
+              --verify-tag \
+              --title "Contextory ${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
