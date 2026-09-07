@@ -31,6 +31,16 @@ final class SharedStorageManagerLeaseTests: XCTestCase {
         XCTAssertFalse(storage.manager.sharedContainerURL.path.contains("/Library/Containers/"))
     }
 
+    func testExplicitQuitStateDefaultsToFalseAndPersistsTransitions() {
+        XCTAssertFalse(manager.isExplicitQuitRequested)
+
+        XCTAssertTrue(manager.setExplicitQuitRequested(true))
+        XCTAssertTrue(manager.isExplicitQuitRequested)
+
+        XCTAssertTrue(manager.setExplicitQuitRequested(false))
+        XCTAssertFalse(manager.isExplicitQuitRequested)
+    }
+
     func testStorageRejectsSymlinkResolvingIntoContainersBeforeCreation() throws {
         let fixtureRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("ContextoryUnsafePathTests")

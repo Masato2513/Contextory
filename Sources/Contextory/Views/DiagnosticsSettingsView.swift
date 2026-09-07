@@ -196,7 +196,7 @@ struct DiagnosticsSettingsView: View {
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                NSApplication.shared.terminate(nil)
+                AppDelegate.terminateForRelaunch()
             }
         }
     }

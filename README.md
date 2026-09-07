@@ -1,8 +1,37 @@
 # Contextory（右键助手）
 
 <p align="center">
-  <img src="Resources/AppIcon.png" width="128" height="128" alt="右键助手图标" />
+  <img src="Resources/AppIcon.png" width="128" height="128" alt="右键助手图标">
 </p>
+
+<h1 align="center">Contextory</h1>
+
+<p align="center">
+  macOS Finder 右键新建文件助手
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-000000?logo=apple&logoColor=white" alt="Apple Silicon">
+  <img src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white" alt="Swift 6.0">
+
+  <a href="https://github.com/Masato2513/Contextory/releases/latest">
+    <img src="https://img.shields.io/github/v/release/Masato2513/Contextory?label=version" alt="Release">
+  </a>
+
+  <a href="https://github.com/Masato2513/Contextory/releases">
+    <img src="https://img.shields.io/github/downloads/Masato2513/Contextory/total" alt="Downloads">
+  </a>
+
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/github/license/Masato2513/Contextory" alt="License">
+  </a>
+
+  <a href="https://github.com/Masato2513/Contextory/stargazers">
+    <img src="https://img.shields.io/github/stars/Masato2513/Contextory?style=flat" alt="Stars">
+  </a>
+</p>
+
 
 Contextory 是一个面向个人使用的 macOS Finder 右键新建文件工具，中文显示名为“右键助手”。名称由 Context 与 Factory 组合而来，表达“右键上下文的工具工厂”。当前分支基于
 [guyue55/MacRightClick](https://github.com/guyue55/MacRightClick) 精简，只保留新建文件、必要设置与诊断能力。
@@ -44,6 +73,10 @@ Contextory 是一个面向个人使用的 macOS Finder 右键新建文件工具�
 菜单图标统一为 16×16，并为浅色、深色外观生成独立缓存。系统外观变化时扩展会刷新缓存；打开菜单时只读取一次系统外观值作兜底，不使用定时轮询。
 
 状态栏使用独立的 20 pt 自定义鼠标模板图标。仓库保存 36×36 Retina PNG，macOS 根据模板透明度自动处理浅色、深色、高对比度和按下状态，不复用彩色 App 图标。
+
+宿主进程在后台不会预先创建设置窗口；只有打开设置时才加载 SwiftUI 视图树并显示 Dock 图标，关闭窗口后会释放界面资源、隐藏 Dock 图标，并继续以轻量状态栏模式运行。设置页显示期间可以从 Dock 菜单正常退出 App。
+
+通过 Dock 或状态栏执行“退出”会暂停 Finder 菜单并阻止扩展重新拉起宿主；扩展进程可能仍由 macOS 暂时保留，但不会继续提供动作。再次手动打开右键助手会恢复菜单。异常崩溃不写入主动退出状态，扩展仍可自动恢复宿主。
 
 ## 设置功能
 
@@ -109,9 +142,7 @@ NOTARY_PROFILE="contextory" \
 
 ## 安装与注册 Finder Extension
 
-推荐打开 DMG 后将 App 拖入“应用程序”；升级时先退出右键助手，并在 Finder 提示时选择“替换”。下面的复制命令适合首次安装；如果目标位置已有旧 App，请先将旧 App 移到废纸篓，避免目录合并后留下旧文件。
-
-如果机器上安装过更名前的版本，请先执行 `./Scripts/uninstall.sh` 清理旧 App、Finder Extension 注册和共享数据，再安装 Contextory。英文产品名、Bundle ID 与 App Group 均已更换，旧设置不会自动迁移。
+推荐打开 DMG 后将 App 拖入“应用程序”；升级时先退出右键助手，并在 Finder 提示时选择“替换”。下面的复制命令适合首次安装；如果目标位置已有 App，请先将它移到废纸篓，避免目录合并后留下旧文件。
 
 ```bash
 cp -R "build/右键助手.app" /Applications/
@@ -167,7 +198,7 @@ hdiutil verify "build/Contextory.dmg"
 ./Scripts/uninstall.sh
 ```
 
-该脚本会删除 `/Applications` 中的新旧 App、注销扩展、清理当前及旧版本的扩展数据，并重启 Finder。它属于破坏性清理操作；如需保留诊断或队列数据，请先备份。
+该脚本会删除 `/Applications` 中的 Contextory App、注销当前扩展、清理当前扩展数据，并重启 Finder。它属于破坏性清理操作；如需保留诊断或队列数据，请先备份。
 
 ## 私有仓库备份
 
@@ -201,7 +232,7 @@ Sources/Contextory/                    宿主 App、设置界面与核心逻辑
 Sources/ContextoryFinderExtension/     Finder Sync 扩展
 Tests/                                  Swift 单元测试
 Scripts/build.sh                        arm64 构建、签名与打包
-Scripts/uninstall.sh                    本机卸载与旧版本残留清理
+Scripts/uninstall.sh                    本机卸载与当前扩展数据清理
 ```
 
 ## 许可证与来源

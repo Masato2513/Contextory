@@ -38,6 +38,7 @@ class FinderSync: FIFinderSync {
     private static var tagToSelection: [Int: MenuSelection] = [:]
     private static var nextTag: Int = 1000
     private var currentObservedPathCount = 0
+    private var isPausedByUser = SharedStorageManager.shared.isExplicitQuitRequested
     private var menuIconAppearanceMode = MenuIconAppearance.current
     private lazy var menuIconAppearance = menuIconAppearanceMode.appearance
     private var menuIconCache: [String: NSImage] = [:]
@@ -65,6 +66,9 @@ class FinderSync: FIFinderSync {
     
     /// 当用户点击菜单项时的回调函数。
     @objc func actionMenuItemSelected(_ sender: NSMenuItem) {
+        // 防止用户退出与已展开菜单点击之间的竞态。
+        guard !SharedStorageManager.shared.isExplicitQuitRequested else { return }
+
         let tag = sender.tag
         logToSharedContainer("[FinderSync] [actionMenuItemSelected] 收到菜单点击事件，Tag: \(tag)", level: .debug)
         
@@ -162,6 +166,8 @@ class FinderSync: FIFinderSync {
     /// 检查并按需拉起主 App（状态栏图标 + 设置面板宿主）。
     /// 已在跑则什么都不做，依赖 Launch Services 的进程级去重。
     static func ensureHostRunning() {
+        guard !SharedStorageManager.shared.isExplicitQuitRequested else { return }
+
         let hostBundleID = "io.github.masato2513.Contextory"
         let isHostRunning = NSWorkspace.shared.runningApplications.contains {
             $0.bundleIdentifier == hostBundleID
@@ -177,6 +183,7 @@ class FinderSync: FIFinderSync {
     }
     
     @objc private func configChanged() {
+        isPausedByUser = SharedStorageManager.shared.isExplicitQuitRequested
         logToSharedContainer("[FinderSync] 收到配置变更，刷新监听路径")
         updateObservedDirectories()
         
@@ -247,6 +254,7 @@ class FinderSync: FIFinderSync {
                 || menuKind == .contextualMenuForContainer else {
             return nil
         }
+        guard !isPausedByUser else { return nil }
         refreshMenuIconAppearance()
         writeHeartbeat(force: false)
 

@@ -6,9 +6,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     
     fileprivate static var instance: AppDelegate?
 
-    var window: NSWindow!
+    /// 设置窗口按需创建，关闭后完整释放 SwiftUI 视图树。
+    /// 后台常驻时只保留状态栏与动作队列，避免为不可见界面长期持有 AttributeGraph。
+    private var window: NSWindow?
     private var folderMonitor: SharedFolderMonitor?
     private var statusItem: NSStatusItem?
+    /// 权限刷新会先启动新实例再结束旧实例，不能被当成用户主动退出。
+    private var isTerminatingForRelaunch = false
     /// 替换旧的 objc_sync_enter(self)：
     /// - 旧实现把锁加在 NSObject self 上，和 AppKit 内部隐式锁高度耦合，
     ///   debug 时一旦死锁，spindump 几乎看不到哪一处先持有；
@@ -29,6 +33,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     )
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        guard prepareRuntimeForLaunch() else {
+            NSApp.terminate(nil)
+            return
+        }
+
         // 1. 初始化并注册固定的新建文件动作。
         registerDefaultActions()
         
@@ -58,24 +67,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // 【关键修复】：启动后立刻检查并消费一次可能早已落盘的中介动作，彻底根治冷启动下拉起主程序却丢失首次点击事件的 Bug！
         self.processPendingAction()
         
-        // 4. 创建 SwiftUI 主设置视图并托管在 NSWindow 中
-        let contentView = ContentView()
-        
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 850, height: 600),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        
-        window.delegate = self // 【关键修复】：指定 Window 代理，使 windowShouldClose 方法能被正确触发
-        window.title = "右键助手"
-        window.center()
-        window.setFrameAutosaveName("MainWindow")
-        window.contentView = NSHostingView(rootView: contentView)
-        window.orderOut(nil) // 【关键体验优化】：确保主设置窗口初始状态绝对不可见
-        
-        // 主程序默认保持安静的菜单栏形态；是否展示设置页由启动来源决定。
+        // 主程序默认保持轻量的菜单栏形态；设置窗口仅在需要显示时创建。
         NSApp.setActivationPolicy(.accessory)
         setupStatusItem()
         showSettingsWindowIfNeededForLaunch()
@@ -150,6 +142,51 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     
     func applicationWillTerminate(_ aNotification: Notification) {
         folderMonitor?.stop()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if !isTerminatingForRelaunch {
+            let saved = SharedStorageManager.shared.setExplicitQuitRequested(true)
+            if saved {
+                SystemReloader.postConfigChanged()
+                SharedStorageManager.shared.writeLog(
+                    "[App] 用户主动退出，Finder 右键菜单已进入暂停状态"
+                )
+            } else {
+                SharedStorageManager.shared.writeLog(
+                    "[App] 无法保存主动退出状态，扩展可能继续自动恢复宿主",
+                    level: .error
+                )
+            }
+        }
+        return .terminateNow
+    }
+
+    /// 后台恢复请求必须尊重用户主动退出；手动打开或登录启动则恢复完整功能。
+    private func prepareRuntimeForLaunch() -> Bool {
+        let isBackgroundRequest = CommandLine.arguments.contains(
+            LaunchPresentationPolicy.backgroundLaunchArgument
+        )
+        let storage = SharedStorageManager.shared
+
+        if isBackgroundRequest {
+            return !storage.isExplicitQuitRequested
+        }
+
+        guard storage.isExplicitQuitRequested else { return true }
+        guard storage.setExplicitQuitRequested(false) else {
+            storage.writeLog("[App] 无法清除主动退出状态", level: .error)
+            return false
+        }
+        SystemReloader.postConfigChanged()
+        storage.writeLog("[App] 检测到手动启动，Finder 右键菜单已恢复")
+        return true
+    }
+
+    /// 设置页内部的权限刷新重启不改变用户启停意图。
+    static func terminateForRelaunch() {
+        instance?.isTerminatingForRelaunch = true
+        NSApp.terminate(nil)
     }
     
     /// 注册默认的一套右键快捷操作
@@ -281,7 +318,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
 
     private func evaluateLaunchPresentation() {
-        guard !window.isVisible else { return }
+        guard window?.isVisible != true else { return }
 
         let context = LaunchPresentationPolicy.context(
             arguments: CommandLine.arguments,
@@ -324,9 +361,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
     
     @objc private func showSettingsWindow() {
-        // 保持在 accessory 模式（无 Dock 图标），仅将窗口前置。
+        // 设置页可见期间恢复标准 App 身份：展示 Dock 图标，并提供系统级退出入口。
+        let settingsWindow = window ?? makeSettingsWindow()
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        settingsWindow.makeKeyAndOrderFront(nil)
+    }
+
+    /// SwiftUI 是设置页需要的重型界面层，不能在每次后台启动时预先实例化。
+    /// 窗口关闭后会由 `windowWillClose` 清空，因此下次打开时重建最新状态。
+    private func makeSettingsWindow() -> NSWindow {
+        let settingsWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 850, height: 600),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: true
+        )
+        settingsWindow.delegate = self
+        settingsWindow.title = "右键助手"
+        settingsWindow.center()
+        settingsWindow.setFrameAutosaveName("MainWindow")
+        settingsWindow.contentView = NSHostingView(rootView: ContentView())
+        window = settingsWindow
+        return settingsWindow
     }
 
     @objc private func toggleSilentLaunch(_ sender: NSMenuItem) {
@@ -376,17 +433,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         NSApp.terminate(nil)
     }
     
-    // MARK: - NSWindowDelegate (常驻后台静默运行生命周期拦截)
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        // 1. 物理隐藏偏好设置窗口，避免被彻底销毁
-        window.orderOut(nil)
-        
-        // 2. 保持 .accessory 模式，仅隐藏窗口。
-        
-        SharedStorageManager.shared.writeLog("[App] 偏好设置窗口已被关闭，宿主程序自动降级为 .accessory 常驻后台静默运行中...")
-        
-        // 3. 返回 false 拦截窗口的实际销毁与主程序自动退出
-        return false
+    // MARK: - NSWindowDelegate
+    func windowWillClose(_ notification: Notification) {
+        guard let closingWindow = notification.object as? NSWindow,
+              closingWindow === window else { return }
+
+        // 先断开 HostingView，再释放 NSWindow，确保 SwiftUI 状态、图层与订阅退出常驻集。
+        closingWindow.contentView = nil
+        window = nil
+        // 关闭设置只退出前台界面，不终止动作宿主；后台恢复为无 Dock 图标的状态栏 App。
+        NSApp.setActivationPolicy(.accessory)
+        SharedStorageManager.shared.writeLog(
+            "[App] 设置窗口已关闭并释放，宿主继续以轻量菜单栏模式运行"
+        )
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

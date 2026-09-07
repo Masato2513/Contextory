@@ -100,6 +100,8 @@ public final class SharedStorageManager: @unchecked Sendable {
     public enum Keys {
         public static let enableDebugLogging = "enable_debug_logging"
         public static let watchedDirectoryPaths = "watched_directory_paths"
+        /// 用户通过 Dock 或状态栏明确退出；扩展据此暂停菜单和宿主自动恢复。
+        public static let explicitQuitRequested = "explicit_quit_requested"
         /// FinderSync 作用范围：`.everywhere` / `.custom`，对应 `WatchScope`。
         public static let watchScope = "watch_scope"
     }
@@ -395,6 +397,16 @@ public final class SharedStorageManager: @unchecked Sendable {
         set {
             setStringArray([newValue.rawValue], forKey: Keys.watchScope)
         }
+    }
+
+    /// 明确退出不同于崩溃或被强制结束：前者应暂停扩展，后两者仍允许自动恢复宿主。
+    public var isExplicitQuitRequested: Bool {
+        getBool(forKey: Keys.explicitQuitRequested, defaultValue: false)
+    }
+
+    @discardableResult
+    public func setExplicitQuitRequested(_ requested: Bool) -> Bool {
+        setBool(requested, forKey: Keys.explicitQuitRequested)
     }
 
     /// 将运行日志追加写入共享日志文件，方便后续排查。
