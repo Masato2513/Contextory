@@ -1,0 +1,789 @@
+import Foundation
+import Darwin
+
+public enum ActionInvocationKind: String, Codable, Equatable, Sendable {
+    case items
+    case container
+}
+
+/// FinderSync 扩展写入、宿主 App 消费的右键动作事件。
+/// schema 1 没有版本与调用上下文字段，解码时按 items 保持兼容；新事件统一写 schema 2。
+public struct SharedActionEvent: Codable, Equatable, Identifiable, Sendable {
+    public let schemaVersion: Int
+    public let id: String
+    public let createdAt: TimeInterval
+    public let actionId: String
+    public let paths: [String]
+    public let invocationKind: ActionInvocationKind
+
+    public init(
+        id: String,
+        createdAt: TimeInterval,
+        actionId: String,
+        paths: [String],
+        invocationKind: ActionInvocationKind = .items,
+        schemaVersion: Int = 2
+    ) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.createdAt = createdAt
+        self.actionId = actionId
+        self.paths = paths
+        self.invocationKind = invocationKind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case id
+        case createdAt
+        case actionId
+        case paths
+        case invocationKind
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        id = try container.decode(String.self, forKey: .id)
+        createdAt = try container.decode(TimeInterval.self, forKey: .createdAt)
+        actionId = try container.decode(String.self, forKey: .actionId)
+        paths = try container.decode([String].self, forKey: .paths)
+        invocationKind = try container.decodeIfPresent(
+            ActionInvocationKind.self,
+            forKey: .invocationKind
+        ) ?? .items
+    }
+}
+
+/// dispatcher 消费一个 PendingAction 时拿到的「租约」凭证（P1-2 事务化）：
+/// - `event` 是真正要执行的动作；
+/// - `inFlightURL` 指向已被搬到 InFlightActions/<owner>/ 的实体文件；
+/// - 跑完动作后必须调用 `SharedStorageManager.acknowledge(_:)` 删除 InFlight 文件，
+///   否则进程崩溃后会被 `reclaimAbandonedInFlightActions` 复活重跑。
+/// `inFlightURL == nil` 仅用于旧版兼容路径（pending_action.json）。
+public struct PendingActionLease: Equatable, Sendable {
+    public let event: SharedActionEvent
+    public let inFlightURL: URL?
+
+    public init(event: SharedActionEvent, inFlightURL: URL?) {
+        self.event = event
+        self.inFlightURL = inFlightURL
+    }
+}
+
+/// FinderSync 的「作用范围」配置（产品决策）：
+/// - `.everywhere`：directoryURLs 注册一组稳定根目录，尽量覆盖所有 Finder 常见路径。
+///   首次安装的默认值，与同类产品（MacZip / Hidden Bar 等）的"开箱即用"体验一致。
+/// - `.custom`：仅在用户显式加入的目录显示菜单（旧行为，给隐私敏感用户保留）。
+///
+/// 之所以做开关而不是直接硬编码 `.everywhere`：
+/// - 方便用户在隐私 / 性能敏感场景下关闭全盘扫描；
+/// - 单一权威：FinderSync 与设置页只读 `watchedDirectoryURLs`，分支收敛在此一处。
+public enum WatchScope: String, Codable, CaseIterable, Equatable, Sendable {
+    case everywhere
+    case custom
+}
+
+/// 共享日志级别。生产环境默认只记录必要信息，调试日志需要用户显式开启。
+public enum SharedLogLevel {
+    case info
+    case debug
+    case error
+}
+
+/// 共享存储管理器，作为宿主主程序与插件扩展之间的数据交换与配置共享层。
+/// 集中处理宿主主程序与 FinderSync 扩展之间的配置、队列和诊断数据。
+public final class SharedStorageManager: @unchecked Sendable {
+    public static let shared = SharedStorageManager()
+    private static let processInstanceIdentifier = UUID().uuidString
+
+    public enum Keys {
+        public static let enableDebugLogging = "enable_debug_logging"
+        public static let watchedDirectoryPaths = "watched_directory_paths"
+        /// FinderSync 作用范围：`.everywhere` / `.custom`，对应 `WatchScope`。
+        public static let watchScope = "watch_scope"
+    }
+    
+    private static let appGroupIdentifier = "group.io.github.masato2513.Contextory"
+    private let extensionBundleIdentifier = "io.github.masato2513.Contextory.Extension"
+    private let configQueue = DispatchQueue(label: "io.github.masato2513.Contextory.config")
+    private let sharedContainerURLOverride: URL?
+    private let shouldUseAppGroupDefaults: Bool
+    private let sharedDefaults: UserDefaults?
+
+    public convenience init(sharedContainerURLOverride: URL? = nil) {
+        let usesAppGroup = Distribution.usesAppGroup
+        let sharedDefaults = sharedContainerURLOverride == nil && usesAppGroup
+            ? UserDefaults(suiteName: Self.appGroupIdentifier)
+            : nil
+
+        self.init(
+            sharedContainerURLOverride: sharedContainerURLOverride,
+            usesAppGroup: usesAppGroup,
+            sharedDefaults: sharedDefaults
+        )
+    }
+
+    init(
+        sharedContainerURLOverride: URL?,
+        usesAppGroup: Bool,
+        sharedDefaults: UserDefaults?,
+        allowAppGroupDefaultsWithContainerOverride: Bool = false
+    ) {
+        self.sharedContainerURLOverride = sharedContainerURLOverride
+        self.shouldUseAppGroupDefaults = usesAppGroup
+            && (sharedContainerURLOverride == nil || allowAppGroupDefaultsWithContainerOverride)
+        self.sharedDefaults = sharedDefaults
+    }
+    
+    /// 获取真实的物理 Home 目录。
+    private func getRealHomeDirectory() -> String {
+        let pw = getpwuid(getuid())
+        if let home = pw?.pointee.pw_dir {
+            return FileManager.default.string(withFileSystemRepresentation: home, length: Int(strlen(home)))
+        }
+        return NSHomeDirectory()
+    }
+    
+    /// 获取当前进程是否是在 Extension (FinderSync) 沙盒进程中运行
+    public var isRunningInExtension: Bool {
+        let bid = Bundle.main.bundleIdentifier ?? ""
+        return bid.contains("Extension")
+    }
+    
+    /// 核心共享容器目录定位器。
+    /// 行为由 `Distribution` 编译期常量决定：
+    /// - MAS 路线：必须走 App Group 容器；若不可写视为配置错误，记 error 并兜底到主 App 自身 NSHomeDirectory
+    /// - website 路线：直接走 Extension Container（~/Library/Containers/<extBundle>/Data），主 App 非 sandbox 时可正常读写
+    public var sharedContainerURL: URL {
+        if let override = sharedContainerURLOverride {
+            try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
+            return override
+        }
+
+        if Distribution.usesAppGroup {
+            if let appGroupURL = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
+            ) {
+                let testDir = appGroupURL.appendingPathComponent(".test_write")
+                do {
+                    try FileManager.default.createDirectory(at: testDir, withIntermediateDirectories: true, attributes: nil)
+                    try FileManager.default.removeItem(at: testDir)
+                    return appGroupURL
+                } catch {
+                    AppLog.error("App Group 容器不可写，分发路线 = \(Distribution.route.rawValue)", category: .storage)
+                    // 不静默降级到 Extension Container：MAS 沙盒下读不到，会再次失败。
+                    // 兜底到主 App 自身 home，至少避免空指针；此路径下队列与配置不会跨进程互通，调用方应通过日志发现配置错。
+                    return URL(fileURLWithPath: NSHomeDirectory())
+                }
+            }
+            AppLog.error("App Group containerURL 返回 nil，分发路线 = \(Distribution.route.rawValue)", category: .storage)
+            return URL(fileURLWithPath: NSHomeDirectory())
+        }
+
+        guard Distribution.allowsCrossContainerExchange else {
+            AppLog.error("当前分发路线既不允许 App Group 也不允许跨 Container 交换", category: .storage)
+            return URL(fileURLWithPath: NSHomeDirectory())
+        }
+
+        // website 路线：跨 Container 读 Extension 沙盒目录。
+        let path: String
+        if isRunningInExtension {
+            path = NSHomeDirectory()
+        } else {
+            let realHome = getRealHomeDirectory()
+            path = (realHome as NSString).appendingPathComponent("Library/Containers/\(extensionBundleIdentifier)/Data")
+        }
+
+        let url = URL(fileURLWithPath: path)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+        return url
+    }
+    
+    /// 共享的 pending_action.json 交换文件 URL，用于多进程数据负载传输
+    /// 保留旧路径仅用于兼容旧版本扩展或历史测试工具。新链路使用 pendingActionsDirectoryURL 队列。
+    public var pendingActionURL: URL {
+        return sharedContainerURL.appendingPathComponent("pending_action.json")
+    }
+
+    /// 共享动作队列目录。每次右键点击写入独立 UUID JSON 文件，避免连续点击覆盖单一 pending 文件。
+    public var pendingActionsDirectoryURL: URL {
+        let url = sharedContainerURL.appendingPathComponent("PendingActions", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+        return url
+    }
+    
+    /// 无法解析的失败队列事件隔离目录，便于诊断不丢数据。
+    public var failedActionsDirectoryURL: URL {
+        let url = sharedContainerURL.appendingPathComponent("FailedActions", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+        return url
+    }
+
+    /// 「已被某进程 lease、但还没确认完成」的事件目录。每次进程启动使用
+    /// `<pid>-<instance-id>` 独占子目录，避免 PID 复用时碰到旧进程的租约。
+    /// 设计目标（P1-2）：
+    /// - 旧实现 decode 之后立即 unconditional 删除，dispatcher 中途崩溃就丢事件；
+    /// - 改成「PendingActions/X.json → InFlightActions/<owner>/X.json」的原子 rename，
+    ///   dispatcher 跑完才 ack 删除 InFlight 文件；
+    /// - 启动时调用 `reclaimAbandonedInFlightActions`：把不属于当前进程的 InFlight
+    ///   文件搬回 PendingActions，再清理空 owner 目录。
+    public var inFlightActionsDirectoryURL: URL {
+        let url = sharedContainerURL.appendingPathComponent("InFlightActions", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+        return url
+    }
+
+    private var currentProcessOwnerDirectoryName: String {
+        "\(ProcessInfo.processInfo.processIdentifier)-\(Self.processInstanceIdentifier)"
+    }
+
+    /// 当前进程实例独占的 InFlight 子目录。
+    private var currentProcessInFlightDirectoryURL: URL {
+        let url = inFlightActionsDirectoryURL.appendingPathComponent(
+            currentProcessOwnerDirectoryName,
+            isDirectory: true
+        )
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+        return url
+    }
+
+    /// 共享的 config.json 配置交换文件 URL。
+    public var configURL: URL {
+        return sharedContainerURL.appendingPathComponent("config.json")
+    }
+
+    public var extensionHeartbeatURL: URL {
+        return sharedContainerURL.appendingPathComponent("extension-heartbeat.json")
+    }
+    
+    public var pendingActionCount: Int {
+        return (try? FileManager.default.contentsOfDirectory(atPath: pendingActionsDirectoryURL.path))?
+            .filter { $0.hasSuffix(".json") }.count ?? 0
+    }
+
+    /// 最老待处理事件的排队时长。只在诊断刷新时读取，不进入 Finder 菜单热路径。
+    public func oldestPendingActionAge(at date: Date = Date()) -> TimeInterval? {
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: pendingActionsDirectoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        let oldestTimestamp = urls
+            .filter { $0.pathExtension == "json" }
+            .compactMap { url -> TimeInterval? in
+                guard let data = try? Data(contentsOf: url),
+                      let event = try? JSONDecoder().decode(SharedActionEvent.self, from: data) else {
+                    return nil
+                }
+                return event.createdAt
+            }
+            .min()
+        return oldestTimestamp.map { max(0, date.timeIntervalSince1970 - $0) }
+    }
+
+    public var failedActionCount: Int {
+        return (try? FileManager.default.contentsOfDirectory(atPath: failedActionsDirectoryURL.path))?
+            .filter { $0.hasSuffix(".json") }.count ?? 0
+    }
+
+    /// 清空失败事件隔离目录中的内容，同时保留目录本身供后续隔离继续使用。
+    public func clearFailedActions() throws {
+        let directoryURL = failedActionsDirectoryURL
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        )
+        for url in contents {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// 共享日志文件 URL。
+    public var logFileURL: URL {
+        let logsDir = sharedContainerURL.appendingPathComponent("Library/Logs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true, attributes: nil)
+        return logsDir.appendingPathComponent("extension.log")
+    }
+    
+    // MARK: - 统一日志写入接口
+    /// 详细调试日志开关。默认关闭，避免生产环境持续记录用户路径与菜单渲染细节。
+    public var isDebugLoggingEnabled: Bool {
+        return getBool(forKey: Keys.enableDebugLogging, defaultValue: false)
+    }
+
+    /// 默认监听的 Finder 常用目录。只生成路径，不会创建目录或探测读权限。
+    public static func defaultWatchedDirectoryPaths(homePath: String) -> [String] {
+        ["Desktop", "Downloads", "Documents"]
+            .map { (homePath as NSString).appendingPathComponent($0) }
+    }
+
+    /// `.everywhere` 模式下真正写入 FinderSync `directoryURLs` 的稳定根目录集合。
+    ///
+    /// 经验上仅注册 `/` 在部分 Finder 会话、外接卷或受系统管理目录中不够稳定；
+    /// 因此保留 `/` 作为兜底，同时显式注册常见系统根、用户 Home、默认种子目录与已挂载卷。
+    /// 这样仍然保持「所有目录」的产品语义，但不把可靠性押在单个根路径上。
+    public static func everywhereWatchedDirectoryPaths(
+        homePath: String,
+        mountedVolumePaths: [String]
+    ) -> [String] {
+        let stableRoots = [
+            "/",
+            "/Applications",
+            "/Users",
+            "/Volumes",
+            "/tmp",
+            "/private/tmp",
+            homePath
+        ]
+
+        let seeds = defaultWatchedDirectoryPaths(homePath: homePath)
+        let paths = stableRoots + seeds + mountedVolumePaths
+
+        var seen = Set<String>()
+        return paths
+            .map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL.path }
+            .filter { seen.insert($0).inserted }
+    }
+
+    public var watchedDirectoryURLs: [URL] {
+        // 单一分发点：作用范围决定 FinderSync 实际看到的目录集合，
+        // 让 FinderSync.updateObservedDirectories 不需要知道任何作用范围细节。
+        switch watchScope {
+        case .everywhere:
+            // FIFinderSyncController.directoryURLs 理论上接受根目录 "/"，但真机上仅依赖
+            // "/" 覆盖所有路径并不总是稳定；这里显式补充常见稳定根目录和已挂载卷。
+            //
+            // 为什么还要加上 Desktop/Downloads/Documents 三条「种子目录」：
+            // - 全新安装的设备上 Finder 还没看见任何受监控目录 → 不会主动拉起 Extension
+            //   → directoryURLs 永远写不进去（chicken-and-egg）。
+            // - 用户最常打开的就是这三个目录；只要在其中之一发生 Finder 活动，Extension
+            //   会被立即拉起，而它启动后注册的全量根目录集合立即向 Finder 生效。
+            let homePath = getRealHomeDirectory()
+            let mountedVolumePaths = FileManager.default
+                .mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes])?
+                .map(\.path) ?? []
+            return Self.everywhereWatchedDirectoryPaths(
+                homePath: homePath,
+                mountedVolumePaths: mountedVolumePaths
+            )
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        case .custom:
+            let defaultPaths = Self.defaultWatchedDirectoryPaths(homePath: getRealHomeDirectory())
+            let paths = getStringArray(forKey: Keys.watchedDirectoryPaths, defaultValue: defaultPaths)
+            return paths.map { URL(fileURLWithPath: $0) }
+        }
+    }
+
+    /// 仅供 UI 设置页展示「自定义目录列表」用：始终读旧 key，不受 `watchScope` 影响。
+    /// 这样切到 .everywhere 时 UI 仍可显示用户之前配置的自定义目录，避免来回切换丢数据。
+    public var customWatchedDirectoryPathsForUI: [String] {
+        let defaultPaths = Self.defaultWatchedDirectoryPaths(homePath: getRealHomeDirectory())
+        return getStringArray(forKey: Keys.watchedDirectoryPaths, defaultValue: defaultPaths)
+    }
+
+    /// 当前作用范围。默认 `.everywhere`（首次安装最贴用户预期）。
+    /// setter 直接落 UserDefaults，配合 DistributedNotificationCenter
+    /// 通知 FinderSync 即刻刷新 `directoryURLs`。
+    public var watchScope: WatchScope {
+        get {
+            // 复用既有的 stringArray 通道（首项即值）。这样不必新增底层 IO 类型，
+            // 同时享受 App Group / config.json 双写的同款持久化语义。
+            let raw = getStringArray(forKey: Keys.watchScope, defaultValue: []).first
+            return raw.flatMap(WatchScope.init(rawValue:)) ?? .everywhere
+        }
+        set {
+            setStringArray([newValue.rawValue], forKey: Keys.watchScope)
+        }
+    }
+
+    /// 将运行日志追加写入共享日志文件，方便后续排查。
+    public func writeLog(_ message: String, level: SharedLogLevel = .info) {
+        if level == .debug && !isDebugLoggingEnabled {
+            return
+        }
+        // 切换到 OSLog：subsystem=io.github.masato2513.Contextory, category=storage。
+        // 旧的 extension.log 文件不再追加（logFileURL 仍保留，仅用于「导出旧日志」按钮的只读访问）。
+        switch level {
+        case .info:  AppLog.info(message, category: .storage)
+        case .debug: AppLog.debug(message, category: .storage)
+        case .error: AppLog.error(message, category: .storage)
+        }
+    }
+
+    public func writeDebugLog(_ message: String) {
+        writeLog(message, level: .debug)
+    }
+
+    // MARK: - 动作队列管理
+
+    /// 将一个右键动作加入共享队列。
+    @discardableResult
+    public func enqueueAction(
+        actionId: String,
+        paths: [String],
+        invocationKind: ActionInvocationKind = .items
+    ) throws -> URL {
+        let event = SharedActionEvent(
+            id: UUID().uuidString,
+            createdAt: Date().timeIntervalSince1970,
+            actionId: actionId,
+            paths: paths,
+            invocationKind: invocationKind
+        )
+
+        let timestamp = Int64(event.createdAt * 1000)
+        let fileName = "\(timestamp)-\(event.id).json"
+        let url = pendingActionsDirectoryURL.appendingPathComponent(fileName)
+        let data = try JSONEncoder().encode(event)
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    /// 消费队列中所有待处理动作的 lease 形式（P1-2 事务化）：
+    /// 1. 把 PendingActions/*.json 原子 rename 到 InFlightActions/<owner>/，
+    ///    避免「decode 成功 → 立即删除 → dispatcher 崩溃」之间丢事件；
+    /// 2. dispatcher 跑完后必须显式 `acknowledge`，否则下次启动 `reclaimAbandonedInFlightActions`
+    ///    会把它搬回 PendingActions 重跑（at-least-once）；
+    /// 3. decode 失败的文件直接搬到 FailedActions 隔离，不阻塞队列。
+    public func consumePendingActionLeases() -> [PendingActionLease] {
+        var leases: [PendingActionLease] = []
+        let directoryURL = pendingActionsDirectoryURL
+
+        let queuedURLs = (try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.creationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        let sortedURLs = queuedURLs
+            .filter { $0.pathExtension == "json" }
+            .sorted { left, right in
+                let leftCreated = (try? left.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+                let rightCreated = (try? right.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+                if leftCreated == rightCreated {
+                    return left.lastPathComponent < right.lastPathComponent
+                }
+                return leftCreated < rightCreated
+            }
+
+        let inFlightDir = currentProcessInFlightDirectoryURL
+
+        for url in sortedURLs {
+            // Step 1: 原子 rename 到 InFlight。极小概率同名时附加 UUID 前缀。
+            var inFlightURL = inFlightDir.appendingPathComponent(url.lastPathComponent)
+            if FileManager.default.fileExists(atPath: inFlightURL.path) {
+                inFlightURL = inFlightDir.appendingPathComponent("\(UUID().uuidString)-\(url.lastPathComponent)")
+            }
+            do {
+                try FileManager.default.moveItem(at: url, to: inFlightURL)
+            } catch {
+                writeLog("[SharedStorage] 队列文件搬入 InFlight 失败，跳过本轮: \(url.lastPathComponent), error: \(error.localizedDescription)", level: .error)
+                continue
+            }
+
+            // Step 2: decode；失败搬到 FailedActions，不进 lease。
+            do {
+                let data = try Data(contentsOf: inFlightURL)
+                let event = try JSONDecoder().decode(SharedActionEvent.self, from: data)
+                leases.append(PendingActionLease(event: event, inFlightURL: inFlightURL))
+            } catch {
+                writeLog("[SharedStorage] 无法解析队列动作文件，已隔离至 FailedActions: \(inFlightURL.lastPathComponent), error: \(error.localizedDescription)", level: .error)
+                let failedURL = failedActionsDirectoryURL.appendingPathComponent(inFlightURL.lastPathComponent)
+                try? FileManager.default.moveItem(at: inFlightURL, to: failedURL)
+            }
+        }
+
+        // 兼容旧 pending_action.json 单文件路径：直接消费（无事务），保持向后兼容。
+        // 新版扩展不会再写此文件，留下来仅为升级残留。
+        if let legacyEvent = consumeLegacyPendingActionEvent() {
+            leases.append(PendingActionLease(event: legacyEvent, inFlightURL: nil))
+        }
+
+        return leases.sorted {
+            if $0.event.createdAt == $1.event.createdAt {
+                return $0.event.id < $1.event.id
+            }
+            return $0.event.createdAt < $1.event.createdAt
+        }
+    }
+
+    /// 标记 lease 已被 dispatcher 安全消费完毕，可以删除 InFlight 文件。
+    /// 必须在 dispatcher 返回后调用，否则进程崩溃会让事件被 reclaim 重跑。
+    public func acknowledge(_ lease: PendingActionLease) {
+        guard let url = lease.inFlightURL else { return }  // legacy 路径无 InFlight 文件
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    /// 把不属于任何存活进程实例的 InFlight 文件搬回 PendingActions，让下一轮消费循环重新处理。
+    /// 应在 AppDelegate.applicationDidFinishLaunching 启动消费循环之前调用一次。
+    /// 默认通过 `kill(pid, 0)` 判断 owner 是否存活；EPERM 表示进程存在但无权发送信号。
+    /// 旧版纯 PID owner 无法可靠区分 PID 复用，保守保留，不做自动恢复。
+    public func reclaimAbandonedInFlightActions() {
+        reclaimAbandonedInFlightActions(processIsAlive: Self.isProcessAlive)
+    }
+
+    /// 可注入存活检查的回收入口，供测试和受控调用使用。
+    /// 当前进程实例、其他存活进程以及无效 owner 目录均不会被回收。
+    public func reclaimAbandonedInFlightActions(processIsAlive: (Int32) -> Bool) {
+        let parent = inFlightActionsDirectoryURL
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let currentOwnerName = currentProcessOwnerDirectoryName
+
+        let pidDirs = (try? FileManager.default.contentsOfDirectory(
+            at: parent,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        for pidDir in pidDirs {
+            let isDir = (try? pidDir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            guard isDir else { continue }
+            let ownerName = pidDir.lastPathComponent
+            guard ownerName != currentOwnerName,
+                  case .processInstance(let ownerPID, _) = Self.inFlightOwner(from: ownerName) else {
+                continue
+            }
+            // 同 PID 但不同 instance-id 的目录属于本次启动前留下的旧租约。
+            // 新进程只会写自己的 instance-id 目录，因此可以安全回收旧目录。
+            if ownerPID != currentPID && processIsAlive(ownerPID) { continue }
+
+            let orphanFiles = (try? FileManager.default.contentsOfDirectory(
+                at: pidDir,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+
+            for orphan in orphanFiles where orphan.pathExtension == "json" {
+                // owner 目录包含本次启动唯一 UUID。即使 PID 在检查后被复用，
+                // 新进程也会写入不同目录；再次检查仅避免搬动刚刚仍存活的旧进程。
+                if ownerPID != currentPID && processIsAlive(ownerPID) { break }
+
+                let target = pendingActionsDirectoryURL.appendingPathComponent(orphan.lastPathComponent)
+                try? FileManager.default.removeItem(at: target)
+                do {
+                    try FileManager.default.moveItem(at: orphan, to: target)
+                    writeLog("[SharedStorage] reclaim 把孤儿 InFlight 事件搬回 PendingActions: \(orphan.lastPathComponent)", level: .info)
+                } catch {
+                    writeLog("[SharedStorage] reclaim 搬回失败: \(orphan.lastPathComponent), error: \(error.localizedDescription)", level: .error)
+                }
+            }
+
+            // 只删除真正为空的 owner 目录；若存活状态在回收期间变化，或目录里有
+            // 非事件文件，绝不能递归删除仍可能被使用的内容。
+            let remainingItems = try? FileManager.default.contentsOfDirectory(atPath: pidDir.path)
+            if remainingItems?.isEmpty == true {
+                try? FileManager.default.removeItem(at: pidDir)
+            }
+        }
+    }
+
+    private enum InFlightOwner {
+        case legacyPID(Int32)
+        case processInstance(pid: Int32, identifier: UUID)
+    }
+
+    private static func inFlightOwner(from directoryName: String) -> InFlightOwner? {
+        let components = directoryName.split(
+            separator: "-",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        let pidComponent = components[0]
+        guard !pidComponent.isEmpty,
+              pidComponent.allSatisfy({ $0 >= "0" && $0 <= "9" }),
+              let pid = Int32(pidComponent),
+              pid > 0 else {
+            return nil
+        }
+
+        if components.count == 1 {
+            return .legacyPID(pid)
+        }
+
+        guard let identifier = UUID(uuidString: String(components[1])) else {
+            return nil
+        }
+        return .processInstance(pid: pid, identifier: identifier)
+    }
+
+    private static func isProcessAlive(_ pid: Int32) -> Bool {
+        errno = 0
+        if kill(pid, 0) == 0 {
+            return true
+        }
+        return errno == EPERM
+    }
+
+    /// 旧 API：tin shell，内部走 lease 路径并立即 ack。
+    /// 不再推荐使用，仅为已有调用点（测试 / 旧版本工具）做兼容。
+    /// 注意：立即 ack 等于"无事务"，调用方必须自己保证 dispatcher 不会崩。
+    @available(*, deprecated, message: "改用 consumePendingActionLeases + acknowledge 以获得崩溃安全语义")
+    public func consumePendingActionEvents() -> [SharedActionEvent] {
+        let leases = consumePendingActionLeases()
+        leases.forEach { acknowledge($0) }
+        return leases.map { $0.event }
+    }
+
+    private func consumeLegacyPendingActionEvent() -> SharedActionEvent? {
+        let legacyURL = pendingActionURL
+        guard FileManager.default.fileExists(atPath: legacyURL.path) else {
+            return nil
+        }
+
+        defer { try? FileManager.default.removeItem(at: legacyURL) }
+
+        guard let data = try? Data(contentsOf: legacyURL),
+              let jsonObject = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+              let actionId = jsonObject["actionId"] as? String,
+              let paths = jsonObject["paths"] as? [String] else {
+            writeLog("[SharedStorage] 旧 pending_action.json 结构无效，已丢弃")
+            return nil
+        }
+
+        return SharedActionEvent(
+            id: "legacy-\(UUID().uuidString)",
+            createdAt: Date().timeIntervalSince1970,
+            actionId: actionId,
+            paths: paths,
+            invocationKind: .items,
+            schemaVersion: 1
+        )
+    }
+    
+    // MARK: - 统一配置管理转换接口（双写机制与多级兜底）
+    
+    /// 仅允许在 `configQueue` 内调用。
+    private func loadConfigUnlocked() -> [String: Any] {
+        guard let data = try? Data(contentsOf: configURL),
+              let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+            return [:]
+        }
+        return json
+    }
+
+    /// 仅允许在 `configQueue` 内调用。
+    private func saveConfigUnlocked(_ config: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: config, options: .prettyPrinted)
+        try data.write(to: configURL, options: .atomic)
+    }
+
+    private func loadConfig() -> [String: Any] {
+        configQueue.sync {
+            loadConfigUnlocked()
+        }
+    }
+
+    @discardableResult
+    private func mutateConfig(
+        update: (inout [String: Any], UserDefaults?) -> Void,
+        mirrorToSharedDefaults: ((UserDefaults, [String: Any]) -> Void)? = nil
+    ) -> Bool {
+        configQueue.sync {
+            let defaults = shouldUseAppGroupDefaults ? sharedDefaults : nil
+            var config = loadConfigUnlocked()
+            update(&config, defaults)
+
+            do {
+                try saveConfigUnlocked(config)
+            } catch {
+                AppLog.error(
+                    "共享配置写入失败：\(error.localizedDescription)",
+                    category: .storage
+                )
+                return false
+            }
+
+            guard let defaults,
+                  let mirrorToSharedDefaults else {
+                return true
+            }
+
+            mirrorToSharedDefaults(defaults, config)
+            let synchronized = defaults.synchronize()
+            if !synchronized {
+                AppLog.error("App Group 偏好同步失败，config.json 已保留权威值", category: .storage)
+            }
+            // config.json 已成功提交且是权威源；镜像失败不能让调用方回滚 UI
+            // 或压制 configChanged，否则界面会与下一次读取到的权威值相反。
+            return true
+        }
+    }
+    
+    /// 获取指定菜单项是否启用
+    /// `config.json` 是两条分发路线的权威值；MAS 的 App Group UserDefaults 仅作为旧配置兜底。
+    /// website 路线不访问 suite defaults，避免触发 cfprefsd 的 "kCFPreferencesAnyUser with a container is only allowed
+    /// for System Containers, detaching from cfprefsd" 错误链——一旦 detach，后续任何 CFPreferences
+    /// 同步 XPC（含 NSWorkspace.accessibility 探测）会变成无人接的 mach_msg 等待，启动期最早被
+    /// SwiftUI 的 NSHostingView.viewDidMoveToWindow 触发，进程死锁（压测捕获）。
+    /// 注入共享目录时始终只读写该目录下的 config.json，避免测试接触真实 App Group 偏好。
+    public func getBool(forKey key: String, defaultValue: Bool = true) -> Bool {
+        let config = loadConfig()
+        if let value = config[key] as? Bool {
+            return value
+        }
+
+        if shouldUseAppGroupDefaults,
+           let sharedDefaults,
+           sharedDefaults.object(forKey: key) != nil {
+            return sharedDefaults.bool(forKey: key)
+        }
+        return defaultValue
+    }
+
+    public func getStringArray(forKey key: String, defaultValue: [String] = []) -> [String] {
+        let config = loadConfig()
+        if let values = config[key] as? [String] {
+            return values
+        }
+
+        if shouldUseAppGroupDefaults,
+           let sharedDefaults,
+           let values = sharedDefaults.stringArray(forKey: key) {
+            return values
+        }
+        return defaultValue
+    }
+
+    /// 写入指定菜单项的启用状态（在宿主设置界面变更配置时调用）
+    /// 仅在 App Group 路线下双写到 group UserDefaults；website 路线只写 config.json，
+    /// 注入共享目录同样只写 config.json；见 getBool 注释。
+    @discardableResult
+    public func setBool(_ value: Bool, forKey key: String) -> Bool {
+        mutateConfig(
+            update: { config, _ in
+                config[key] = value
+            },
+            mirrorToSharedDefaults: { defaults, _ in
+                defaults.set(value, forKey: key)
+            }
+        )
+    }
+
+    @discardableResult
+    public func setStringArray(_ values: [String], forKey key: String) -> Bool {
+        let uniqueValues = Array(NSOrderedSet(array: values)).compactMap { $0 as? String }
+
+        return mutateConfig(
+            update: { config, _ in
+                config[key] = uniqueValues
+            },
+            mirrorToSharedDefaults: { defaults, _ in
+                defaults.set(uniqueValues, forKey: key)
+            }
+        )
+    }
+
+    /// 移除指定配置值，让后续读取回到默认值。用于恢复默认设置和测试隔离。
+    @discardableResult
+    public func removeValue(forKey key: String) -> Bool {
+        mutateConfig(
+            update: { config, _ in
+                config.removeValue(forKey: key)
+            },
+            mirrorToSharedDefaults: { defaults, _ in
+                defaults.removeObject(forKey: key)
+            }
+        )
+    }
+}
