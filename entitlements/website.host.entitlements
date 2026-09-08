@@ -9,5 +9,8 @@
     <array>
         <string>group.io.github.masato2513.Contextory</string>
     </array>
+    <!-- 云盘兼容菜单只向 Finder 发送 Apple Events，用于读取当前目录。 -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
 </dict>
 </plist>

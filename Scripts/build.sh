@@ -56,7 +56,8 @@ if [ -n "${VERSION_OVERRIDE:-}" ]; then
 elif [ -f "VERSION" ]; then
     VERSION=$(tr -d '\r\n' < VERSION)
 else
-    VERSION="1.0.0"
+    echo "❌ [Build] 缺少 VERSION 文件，无法确定构建版本。"
+    exit 2
 fi
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "❌ [Build] VERSION 必须是稳定语义版本，实际为: $VERSION"
@@ -121,9 +122,11 @@ cat <<EOF > "$APP_BUNDLE/Contents/Info.plist"
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>15.0</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>用于读取当前 Finder 目录，以便在云盘位置通过 Command 加右键新建文件。</string>
     <key>LSUIElement</key>
     <true/>
     <key>LSMultipleInstancesProhibited</key>
@@ -156,7 +159,7 @@ cat <<EOF > "$EXT_BUNDLE/Contents/Info.plist"
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>15.0</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>
@@ -223,6 +226,10 @@ else
     exit 2
 fi
 
+# 分发包内保留本项目及本轮参考代码的授权声明，满足 MIT 再分发要求。
+cp "LICENSE" "$APP_BUNDLE/Contents/Resources/LICENSE.txt"
+cp "THIRD_PARTY_NOTICES.md" "$APP_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.md"
+
 # 拷贝 Office 三件套最小骨架到 .app/Contents/Resources/Templates/
 if [ -d "Resources/Templates" ]; then
     mkdir -p "$APP_BUNDLE/Contents/Resources/Templates"
@@ -233,6 +240,7 @@ fi
 # 5. 源码列表定义
 HOST_SOURCES="
     Sources/Contextory/AppDelegate.swift \
+    Sources/Contextory/Services/FinderCompatibilityMenuController.swift \
     Sources/Contextory/Views/ContentView.swift \
     Sources/Contextory/Views/GeneralSettingsView.swift \
     Sources/Contextory/Views/FinderSettingsView.swift \
@@ -284,12 +292,12 @@ esac
 
 # 6. 编译 Apple Silicon 宿主主程序
 echo "🛠️ [Build] 编译宿主主程序 (arm64)..."
-swiftc $COMMON_FLAGS -target arm64-apple-macosx13.0 $HOST_SOURCES \
+swiftc $COMMON_FLAGS -target arm64-apple-macosx15.0 $HOST_SOURCES \
     -o "$APP_BUNDLE/Contents/MacOS/Contextory"
 
 # 7. 编译 Apple Silicon Finder Sync 扩展
 echo "🛠️ [Build] 编译 Finder Sync 扩展插件 (arm64)..."
-swiftc $COMMON_FLAGS -target arm64-apple-macosx13.0 $EXT_SOURCES \
+swiftc $COMMON_FLAGS -target arm64-apple-macosx15.0 $EXT_SOURCES \
     -o "$EXT_BUNDLE/Contents/MacOS/ContextoryFinderExtension"
 
 
@@ -334,7 +342,7 @@ codesign --force --sign "$CODE_SIGN_IDENTITY" $CODESIGN_RUNTIME_ARGS --entitleme
 #    历史上这两行都漏了 --entitlements，导致主 App 实际是 adhoc 无 entitlements；
 #    本轮 build.sh 重构后必须显式传入，否则 application-groups 不生效，
 #    SharedStorageManager 与 FinderSync 之间的 cross-container 物理路径访问会被
-#    macOS 13+ Hidden Subsystem Block 拦截。
+#    macOS 15+ Hidden Subsystem Block 拦截。
 codesign --force --sign "$CODE_SIGN_IDENTITY" $CODESIGN_RUNTIME_ARGS --entitlements "$BUILD_DIR/Contextory.entitlements" "$APP_BUNDLE/Contents/MacOS/Contextory"
 codesign --force --sign "$CODE_SIGN_IDENTITY" $CODESIGN_RUNTIME_ARGS --entitlements "$BUILD_DIR/Contextory.entitlements" "$APP_BUNDLE"
 

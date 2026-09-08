@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white" alt="macOS 15+">
   <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-000000?logo=apple&logoColor=white" alt="Apple Silicon">
   <img src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white" alt="Swift 6.0">
 
@@ -42,9 +42,9 @@ Contextory 是一个面向个人使用的 macOS Finder 右键新建文件工具�
 | --- | --- |
 | 产品名称 | Contextory |
 | 中文显示名 | 右键助手 |
-| 当前版本 | `1.0.0`（以 `VERSION` 文件为准） |
+| 当前版本 | `1.0.1`（以 `VERSION` 文件为准） |
 | 支持架构 | 仅 `arm64`，即 Apple Silicon / M 系列 Mac |
-| 最低系统 | macOS 13 |
+| 最低系统 | macOS 15（Sequoia） |
 | 默认签名 | Ad-hoc，未使用 Developer ID、未公证 |
 | 网络能力 | 无更新检查、下载、广告、遥测或其他网络请求 |
 
@@ -70,6 +70,11 @@ Contextory 是一个面向个人使用的 macOS Finder 右键新建文件工具�
 - “其他…”会拒绝 DOCX、XLSX、PPTX、PDF，避免生成无法打开的零字节伪文件。
 - 创建成功后 Finder 保留新文件的高亮选中；成功提示可在“概览”中关闭。
 
+对于 iCloud Drive、同步桌面、OneDrive 等会抑制第三方 FinderSync 菜单的
+File Provider 目录，可在“Finder → 云盘兼容菜单”中启用 `⌘ + 右键`。该手势
+弹出独立的新建文件菜单并复用上面的全部格式、模板、命名与高亮逻辑；普通右键
+仍由 Finder 原样处理。
+
 菜单图标统一为 16×16，并为浅色、深色外观生成独立缓存。系统外观变化时扩展会刷新缓存；打开菜单时只读取一次系统外观值作兜底，不使用定时轮询。
 
 状态栏使用独立的 20 pt 自定义鼠标模板图标。仓库保存 36×36 Retina PNG，macOS 根据模板透明度自动处理浅色、深色、高对比度和按下状态，不复用彩色 App 图标。
@@ -85,14 +90,18 @@ Contextory 是一个面向个人使用的 macOS Finder 右键新建文件工具�
 ## 设置功能
 
 - 概览：Finder Extension 状态、登录时启动、后台静默启动、成功提示。
-- Finder：扩展注册、全部目录或自定义目录、文件访问权限检测。
+- Finder：扩展注册、`⌘ + 右键`云盘兼容菜单、全部目录或自定义目录、文件访问权限检测。
 - 诊断：服务状态、动作队列、推荐修复、诊断报告和可选调试日志。
 
 “完全磁盘访问”只影响受保护位置的文件读写，不决定 Finder 菜单是否显示。没有访问受保护目录的需求时，不必为了菜单显示而授权。
 
+云盘兼容菜单默认关闭。启用后需要授予“辅助功能”权限，并在第一次使用时允许
+右键助手控制 Finder；它只监听右键按下/抬起事件，不监听键盘输入或鼠标移动。
+若希望重启 Mac 后仍可直接使用，请同时启用“登录时启动右键助手”。
+
 ## 离线与隐私
 
-运行时只进行本地文件操作、系统日志记录，以及 Finder Extension 与宿主 App 之间的本地动作队列通信。源码已移除更新 UI、更新检查、外部工具下载和无效的云盘路径注册逻辑。
+运行时只进行本地文件操作、系统日志记录，以及 Finder Extension 与宿主 App 之间的本地动作队列通信。启用云盘兼容菜单后，会使用本机辅助功能 API 识别 Finder 点击位置，并通过本机 Apple Events 读取当前 Finder 目录；这些操作不经过网络。源码已移除更新 UI、更新检查、外部工具下载和无效的云盘路径注册逻辑。
 
 如需自行复核，可在构建后搜索可执行文件中的常见网络符号：
 
@@ -109,7 +118,7 @@ rg -a -i 'URLSession|https?://|github\.com|sparkle' \
 ### 环境要求
 
 - Apple Silicon Mac
-- macOS 13 或更高版本
+- macOS 15（Sequoia）或更高版本
 - Xcode 或 Xcode Command Line Tools，且可用 `swiftc`、`xcrun`、`codesign`、`hdiutil`、`iconutil`
 
 首次配置命令行工具时可执行：
@@ -137,11 +146,11 @@ swift test
 
 仓库内置 `.github/workflows/release.yml`。推送与 `VERSION` 一致的版本标签时，GitHub Actions 会在 Apple Silicon macOS runner 上自动运行测试、构建并校验产物，然后创建 GitHub Release，上传 DMG、ZIP 与 SHA-256 校验文件。
 
-发布 1.0.0：
+发布 1.0.1：
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
 也可以在仓库的 Actions 页面手动运行“构建与发布”；手动运行只生成保留 30 天的 Actions Artifact，不会创建或覆盖 Release。
@@ -183,12 +192,15 @@ Ad-hoc 构建首次打开被 Gatekeeper 阻止时，可按住 Control 点击 App
 4. 创建后文件保持高亮；关闭“显示成功提示”后不再弹出成功提示。
 5. 浅色与深色外观下菜单图标清晰、尺寸一致；切换外观后重新打开菜单即可更新。
 6. 重启 App 与 Finder 后扩展仍可正常使用。
+7. 在 Finder 设置中启用云盘兼容菜单并完成辅助功能、Finder 自动化授权。
+8. 在 iCloud Drive、iCloud 同步桌面或 OneDrive 空白处按住 `⌘` 再右键，能够创建文件；不按 `⌘` 的普通右键保持原行为。
 
 安装新构建后第一次仍看到旧图标或旧菜单时，执行一次 `killall Finder` 清除 Finder Extension 进程缓存。之后系统外观切换由扩展自动处理。
 
 ## 已知限制
 
-- Finder 可能在 iCloud Drive、同步桌面以及部分 File Provider 目录中抑制第三方 FinderSync 菜单。这不是文件创建逻辑本身能够绕过的限制；可先在菜单正常的本地目录创建，再拖入云盘目录。
+- Finder 仍可能在 iCloud Drive、同步桌面以及部分 File Provider 目录中抑制第三方 FinderSync 原生菜单；这是系统限制。需要在设置中启用独立的 `⌘ + 右键`兼容菜单。
+- `⌘ + 右键`依赖宿主 App 后台运行、辅助功能权限和 Finder 自动化权限；通过 Dock 或状态栏退出右键助手后，该手势会随宿主一起停用。
 - “其他…”用于普通空文件，不负责生成 Office、PDF 等结构化文件；这些格式必须走对应的一键模板动作。
 - 当前产物仅包含 `arm64`，不能在 Intel Mac 上运行。
 
@@ -201,6 +213,8 @@ Finder 中没有菜单时，依次检查：
 3. 在“诊断”页执行建议修复或复制诊断报告。
 4. 执行 `killall Finder`，再重新打开 Finder 菜单。
 5. 仅当目标目录确实受保护且创建失败时，再检查完全磁盘访问权限。
+
+`⌘ + 右键`兼容菜单没有响应时，确认 Finder 页中的开关已开启，并检查“隐私与安全性 → 辅助功能”和“隐私与安全性 → 自动化”中的右键助手权限。Ad-hoc 签名产物升级后，macOS 可能要求重新授权。
 
 可用以下命令检查签名和架构：
 
@@ -256,4 +270,4 @@ Scripts/uninstall.sh                    本机卸载与当前扩展数据清理
 
 ## 许可证与来源
 
-本项目是 [guyue55/MacRightClick](https://github.com/guyue55/MacRightClick) 的个人精简分支，继续遵循 [MIT License](LICENSE)。上游代码版权归 `guyue55`，本分支的修改版权归 `Masato2513`；两项声明均保留在许可证文件中。具体修改内容记录在本 README 与 [CHANGELOG](CHANGELOG.md)，避免许可证正文随功能变化而失真。
+本项目是 [guyue55/MacRightClick](https://github.com/guyue55/MacRightClick) 的个人精简分支，继续遵循 [MIT License](LICENSE)。上游代码版权归 `guyue55`，本分支的修改版权归 `Masato2513`；两项声明均保留在许可证文件中。Finder 组合右键兼容层参考了 MIT 项目 MacTweaks，声明见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)。具体修改内容记录在本 README 与 [CHANGELOG](CHANGELOG.md)，避免许可证正文随功能变化而失真。

@@ -57,7 +57,7 @@ struct OverviewSettingsView: View {
 
             Section("关于") {
                 LabeledContent("版本") {
-                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")
+                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "未知")
                         .foregroundStyle(.secondary)
                 }
                 LabeledContent("许可") {

@@ -1,5 +1,4 @@
 import SwiftUI
-import FinderSync
 
 struct PermissionsSettingsView: View {
     @State private var hasFullDiskAccess = false
@@ -8,6 +7,8 @@ struct PermissionsSettingsView: View {
     @State private var shouldShowManualRelaunchFallback = false
     @State private var watchedDirectoryPaths: [String] = []
     @State private var watchScope: WatchScope = .everywhere
+    @State private var isCompatibilityMenuEnabled = false
+    @State private var hasAccessibilityAccess = false
     // 改事件驱动：不再用 2s 轮询，避免 App 在后台空跑 timer。
     // 状态刷新由三处事件触发：onAppear、willBecomeActive（用户从系统设置切回时）、
     // 以及 FDA HStack 内的「重新检测」按钮（用户已知刚授权完想立刻确认）。
@@ -16,6 +17,49 @@ struct PermissionsSettingsView: View {
         Form {
             Section("Finder 扩展") {
                 ExtensionRegistrationBox()
+            }
+
+            Section("云盘兼容菜单") {
+                Toggle("启用 ⌘ + 右键兼容菜单", isOn: Binding(
+                    get: { isCompatibilityMenuEnabled },
+                    set: saveCompatibilityMenu
+                ))
+
+                Text("用于 iCloud、OneDrive 等无法显示 Finder 扩展菜单的位置。普通右键不受影响；该功能需要右键助手在后台运行。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if isCompatibilityMenuEnabled {
+                    HStack(spacing: 10) {
+                        Label(
+                            hasAccessibilityAccess ? "辅助功能已授权" : "辅助功能尚未授权",
+                            systemImage: hasAccessibilityAccess
+                                ? "checkmark.circle.fill"
+                                : "exclamationmark.circle.fill"
+                        )
+                        .foregroundStyle(hasAccessibilityAccess ? Color.green : Color.orange)
+
+                        Spacer()
+
+                        if !hasAccessibilityAccess {
+                            Button("请求授权") {
+                                FinderCompatibilityPermission.requestAccessibility()
+                            }
+                        }
+
+                        Button("辅助功能设置") {
+                            FinderCompatibilityPermission.openAccessibilitySettings()
+                        }
+
+                        Button("自动化设置") {
+                            FinderCompatibilityPermission.openAutomationSettings()
+                        }
+                    }
+
+                    Text("首次在 Finder 中使用 ⌘ + 右键时，macOS 还会询问是否允许右键助手控制 Finder，请选择“允许”。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("右键菜单范围") {
@@ -139,7 +183,32 @@ struct PermissionsSettingsView: View {
         // UI 永远展示用户的「自定义目录」原始列表（即使当前作用范围是 .everywhere，
         // 切回 .custom 时仍保留之前的自定义配置，避免来回切换丢数据）。
         watchedDirectoryPaths = SharedStorageManager.shared.customWatchedDirectoryPathsForUI
+        isCompatibilityMenuEnabled = SharedStorageManager.shared.getBool(
+            forKey: SharedStorageManager.Keys.finderCompatibilityMenuEnabled,
+            defaultValue: false
+        )
+        hasAccessibilityAccess = FinderCompatibilityPermission.isAccessibilityTrusted
         checkFullDiskAccess(promptOnGrant: promptOnFullDiskAccessGrant)
+    }
+
+    private func saveCompatibilityMenu(_ enabled: Bool) {
+        guard SharedStorageManager.shared.setBool(
+            enabled,
+            forKey: SharedStorageManager.Keys.finderCompatibilityMenuEnabled
+        ) else {
+            showConfigurationSaveFailure("⌘ + 右键兼容菜单")
+            return
+        }
+
+        isCompatibilityMenuEnabled = enabled
+        if enabled && !FinderCompatibilityPermission.isAccessibilityTrusted {
+            FinderCompatibilityPermission.requestAccessibility()
+        }
+        hasAccessibilityAccess = FinderCompatibilityPermission.isAccessibilityTrusted
+        NotificationCenter.default.post(
+            name: .finderCompatibilityMenuConfigurationDidChange,
+            object: nil
+        )
     }
 
     private func addWatchedDirectory() {

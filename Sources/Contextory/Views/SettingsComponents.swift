@@ -1,28 +1,26 @@
 import SwiftUI
-import FinderSync
 
 private let contextoryFinderExtensionBundleIdentifier = "io.github.masato2513.Contextory.Extension"
 
 func openFinderExtensionSettings() {
-    if #available(macOS 13.0, *),
-       let url = URL(string: "x-apple.systempreferences:com.apple.ExtensionsPreferences") {
+    if let url = URL(string: "x-apple.systempreferences:com.apple.ExtensionsPreferences") {
         NSWorkspace.shared.open(url)
-    } else {
-        FIFinderSyncController.showExtensionManagementInterface()
     }
 }
 
-func makeRightClickMenuHealthSnapshot(
-    finderSyncControllerEnabled: Bool = FIFinderSyncController.isExtensionEnabled
-) -> RightClickMenuHealthSnapshot {
+func queryFinderExtensionRegistrationState() -> FinderExtensionRegistrationState {
     let query = SystemReloader.queryFinderExtension(
         bundleIdentifier: contextoryFinderExtensionBundleIdentifier
     )
-    let pluginKitState = FinderExtensionDiagnostics.registrationState(
+    return FinderExtensionDiagnostics.registrationState(
         pluginKitOutput: query.standardOutput,
         commandSucceeded: query.isSuccess,
         bundleIdentifier: contextoryFinderExtensionBundleIdentifier
     )
+}
+
+func makeRightClickMenuHealthSnapshot() -> RightClickMenuHealthSnapshot {
+    let pluginKitState = queryFinderExtensionRegistrationState()
     let storage = SharedStorageManager.shared
     let heartbeatState = ExtensionHeartbeatStore(
         fileURL: storage.extensionHeartbeatURL
@@ -30,7 +28,6 @@ func makeRightClickMenuHealthSnapshot(
 
     return FinderExtensionDiagnostics.makeSnapshot(
         fullDiskAccessGranted: FullDiskAccessChecker.hasFullDiskAccess(),
-        finderSyncControllerEnabled: finderSyncControllerEnabled,
         pluginKitState: pluginKitState,
         heartbeatState: heartbeatState,
         watchScope: storage.watchScope,
@@ -137,17 +134,26 @@ struct SettingsStatusRow: View {
 // MARK: - Finder extension management
 struct ExtensionRegistrationBox: View {
     @State private var isRegistering = false
-    @State private var isExtensionEnabled = FIFinderSyncController.isExtensionEnabled
+    @State private var extensionState: FinderExtensionRegistrationState?
+
+    private var isExtensionEnabled: Bool {
+        extensionState == .enabled
+    }
 
     var body: some View {
         HStack(spacing: 12) {
-            Label(
-                isExtensionEnabled ? "扩展已启用" : "扩展尚未启用",
-                systemImage: isExtensionEnabled
-                    ? "checkmark.circle.fill"
-                    : "exclamationmark.circle.fill"
-            )
-            .foregroundStyle(isExtensionEnabled ? Color.green : Color.orange)
+            if extensionState == nil {
+                ProgressView("正在检测扩展状态…")
+                    .controlSize(.small)
+            } else {
+                Label(
+                    isExtensionEnabled ? "扩展已启用" : "扩展尚未启用",
+                    systemImage: isExtensionEnabled
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.circle.fill"
+                )
+                .foregroundStyle(isExtensionEnabled ? Color.green : Color.orange)
+            }
 
             Spacer()
 
@@ -172,7 +178,12 @@ struct ExtensionRegistrationBox: View {
     }
 
     private func refresh() {
-        isExtensionEnabled = FIFinderSyncController.isExtensionEnabled
+        DispatchQueue.global(qos: .userInitiated).async {
+            let state = queryFinderExtensionRegistrationState()
+            DispatchQueue.main.async {
+                extensionState = state
+            }
+        }
     }
 
     private var registrationButton: some View {
@@ -191,7 +202,7 @@ struct ExtensionRegistrationBox: View {
             }
         }
         .frame(minWidth: 92)
-        .disabled(isRegistering)
+        .disabled(isRegistering || extensionState == nil)
     }
 
     private func autoRegisterExtension() {
@@ -267,11 +278,8 @@ struct ExtensionStatusBanner: View {
     }
 
     private func checkStatus() {
-        let finderSyncEnabled = FIFinderSyncController.isExtensionEnabled
         DispatchQueue.global(qos: .userInitiated).async {
-            let nextSnapshot = makeRightClickMenuHealthSnapshot(
-                finderSyncControllerEnabled: finderSyncEnabled
-            )
+            let nextSnapshot = makeRightClickMenuHealthSnapshot()
             DispatchQueue.main.async {
                 snapshot = nextSnapshot
             }

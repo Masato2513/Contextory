@@ -35,7 +35,6 @@ public enum RightClickMenuServiceLevel: Equatable, Sendable {
 public struct RightClickMenuHealthSnapshot: Equatable, Sendable {
     public let fullDiskAccessState: FullDiskAccessState
     public let finderExtensionState: FinderExtensionRegistrationState
-    public let finderSyncControllerEnabled: Bool
     public let watchScope: WatchScope
     public let heartbeatState: ExtensionHeartbeatState
     public let observedPathCount: Int
@@ -45,9 +44,6 @@ public struct RightClickMenuHealthSnapshot: Equatable, Sendable {
     public let recommendedRepairAction: RecommendedRepairAction
 
     public var menuServiceLevel: RightClickMenuServiceLevel {
-        if !finderSyncControllerEnabled {
-            return .unavailable
-        }
         switch finderExtensionState {
         case .notRegistered, .registeredButNotEnabled:
             return .unavailable
@@ -97,7 +93,6 @@ public struct RightClickMenuHealthSnapshot: Equatable, Sendable {
             "Menu Service: \(menuServiceLevel.summaryValue)",
             "Full Disk Access: \(fullDiskAccessState.summaryValue)",
             "Extension Registration: \(finderExtensionState.summaryValue)",
-            "Finder Controller Enabled: \(finderSyncControllerEnabled)",
             "Heartbeat: \(heartbeat)",
             "Watch Scope: \(watchScope.rawValue)",
             "Observed Paths: \(observedPathCount)",
@@ -174,7 +169,6 @@ public enum FinderExtensionDiagnostics {
 
     public static func makeSnapshot(
         fullDiskAccessGranted: Bool,
-        finderSyncControllerEnabled: Bool,
         pluginKitState: FinderExtensionRegistrationState,
         heartbeatState: ExtensionHeartbeatState,
         watchScope: WatchScope,
@@ -191,7 +185,6 @@ public enum FinderExtensionDiagnostics {
         }
         let repairAction = recommendedRepairAction(
             fullDiskAccessState: fullDiskAccessState,
-            finderSyncControllerEnabled: finderSyncControllerEnabled,
             finderExtensionState: pluginKitState,
             heartbeatState: heartbeatState
         )
@@ -199,7 +192,6 @@ public enum FinderExtensionDiagnostics {
         return RightClickMenuHealthSnapshot(
             fullDiskAccessState: fullDiskAccessState,
             finderExtensionState: pluginKitState,
-            finderSyncControllerEnabled: finderSyncControllerEnabled,
             watchScope: watchScope,
             heartbeatState: heartbeatState,
             observedPathCount: observedPathCount,
@@ -210,31 +202,8 @@ public enum FinderExtensionDiagnostics {
         )
     }
 
-    /// 旧调用点兼容适配：明确传入的 observedPathCount 视为已取得最近心跳。
-    public static func makeSnapshot(
-        fullDiskAccessGranted: Bool,
-        finderSyncControllerEnabled: Bool,
-        pluginKitState: FinderExtensionRegistrationState,
-        watchScope: WatchScope,
-        observedPathCount: Int,
-        pendingActionCount: Int,
-        failedActionCount: Int
-    ) -> RightClickMenuHealthSnapshot {
-        makeSnapshot(
-            fullDiskAccessGranted: fullDiskAccessGranted,
-            finderSyncControllerEnabled: finderSyncControllerEnabled,
-            pluginKitState: pluginKitState,
-            heartbeatState: .recent(observedPathCount: observedPathCount),
-            watchScope: watchScope,
-            pendingActionCount: pendingActionCount,
-            oldestPendingAge: nil,
-            failedActionCount: failedActionCount
-        )
-    }
-
     private static func recommendedRepairAction(
         fullDiskAccessState: FullDiskAccessState,
-        finderSyncControllerEnabled: Bool,
         finderExtensionState: FinderExtensionRegistrationState,
         heartbeatState: ExtensionHeartbeatState
     ) -> RecommendedRepairAction {
@@ -248,9 +217,6 @@ public enum FinderExtensionDiagnostics {
             break
         }
 
-        if !finderSyncControllerEnabled {
-            return .restartFinder
-        }
         switch heartbeatState {
         case .recent(let observedPathCount) where observedPathCount > 0:
             break

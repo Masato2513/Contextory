@@ -12,6 +12,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     /// 后台常驻时只保留状态栏与动作队列，避免为不可见界面长期持有 AttributeGraph。
     private var window: NSWindow?
     private var folderMonitor: SharedFolderMonitor?
+    /// File Provider 目录中的 `⌘ + 右键`独立兼容菜单；运行在现有宿主内，不新增进程。
+    private var finderCompatibilityMenuController: FinderCompatibilityMenuController?
     private var statusItem: NSStatusItem?
     /// 权限刷新会先启动新实例再结束旧实例，不能被当成用户主动退出。
     private var isTerminatingForRelaunch = false
@@ -86,6 +88,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // 主程序默认保持轻量的菜单栏形态；设置窗口仅在需要显示时创建。
         NSApp.setActivationPolicy(.accessory)
         setupStatusItem()
+        let compatibilityMenuController = FinderCompatibilityMenuController()
+        compatibilityMenuController.start()
+        finderCompatibilityMenuController = compatibilityMenuController
         showSettingsWindowIfNeededForLaunch()
         handlePermissionRefreshLaunchIfNeeded()
         
@@ -159,6 +164,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     func applicationWillTerminate(_ aNotification: Notification) {
         pendingWindowPresentation?.cancel()
         pendingWindowRelease?.cancel()
+        finderCompatibilityMenuController?.stop()
         folderMonitor?.stop()
     }
 
@@ -438,7 +444,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         alert.messageText = "关于右键助手"
         
         // 从 Bundle 动态拉取当前最新的全局单源版本号
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "未知"
         alert.informativeText = """
         右键助手 (Contextory)
         版本: v\(version)

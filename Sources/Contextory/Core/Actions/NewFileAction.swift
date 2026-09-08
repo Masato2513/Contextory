@@ -281,12 +281,7 @@ private func createAndReveal(
             content: "已生成并高亮：\(finalURL.lastPathComponent)",
             isSuccess: true
         )
-        DispatchQueue.main.async {
-            NSWorkspace.shared.selectFile(
-                finalURL.path,
-                inFileViewerRootedAtPath: finalURL.deletingLastPathComponent().path
-            )
-        }
+        NewFileRevealer.reveal(finalURL)
         return true
     } catch {
         AppLog.error("创建文件失败：\(error.localizedDescription)", category: .action)
@@ -296,5 +291,102 @@ private func createAndReveal(
             isSuccess: false
         )
         return false
+    }
+}
+
+/// 高亮新建文件。Finder 的公开 `NSWorkspace` API 会为桌面打开一个新窗口，
+/// 因此在兼容菜单启用时，桌面文件改为直接设置 Finder 桌面的选中项。
+private enum NewFileRevealer {
+    private static let desktopSelectionDelay: TimeInterval = 0.15
+    private static let desktopSelectionScriptSource = """
+    on selectDesktopItem(posixPath)
+        tell application "Finder"
+            set createdItem to (POSIX file posixPath as alias)
+            activate
+            select window of desktop
+            set selection to {createdItem}
+        end tell
+    end selectDesktopItem
+    """
+
+    /// Open Scripting Architecture 的四字符事件码。直接使用系统 ABI 常量值，
+    /// 避免仅为四个常量链接 Carbon umbrella framework。
+    private enum AppleEventCode {
+        static let appleScriptSuite: AEEventClass = 0x61736372 // 'ascr'
+        static let subroutineEvent: AEEventID = 0x70736272 // 'psbr'
+        static let subroutineName: AEKeyword = 0x736E616D // 'snam'
+        static let directObject: AEKeyword = 0x2D2D2D2D // '----'
+    }
+
+    static func reveal(_ fileURL: URL) {
+        let useDesktopSelection = isDesktopItem(fileURL)
+            && SharedStorageManager.shared.getBool(
+                forKey: SharedStorageManager.Keys.finderCompatibilityMenuEnabled,
+                defaultValue: false
+            )
+
+        if useDesktopSelection {
+            // iCloud/File Provider 同步桌面有时不会在写入完成的同一轮事件循环中
+            // 立即刷新图标；只延迟执行一次，不引入轮询或常驻任务。
+            DispatchQueue.main.asyncAfter(deadline: .now() + desktopSelectionDelay) {
+                selectOnFinderDesktop(fileURL)
+            }
+            return
+        }
+
+        DispatchQueue.main.async {
+            NSWorkspace.shared.selectFile(
+                fileURL.path,
+                inFileViewerRootedAtPath: fileURL.deletingLastPathComponent().path
+            )
+        }
+    }
+
+    private static func isDesktopItem(_ fileURL: URL) -> Bool {
+        guard let desktopURL = try? FileManager.default.url(
+            for: .desktopDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ) else {
+            return false
+        }
+
+        let parentURL = fileURL.deletingLastPathComponent()
+        return normalizedDirectoryURL(parentURL) == normalizedDirectoryURL(desktopURL)
+    }
+
+    private static func normalizedDirectoryURL(_ url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    private static func selectOnFinderDesktop(_ fileURL: URL) {
+        guard let script = NSAppleScript(source: desktopSelectionScriptSource) else {
+            AppLog.error("初始化 Finder 桌面高亮脚本失败", category: .action)
+            return
+        }
+
+        let event = NSAppleEventDescriptor(
+            eventClass: AppleEventCode.appleScriptSuite,
+            eventID: AppleEventCode.subroutineEvent,
+            targetDescriptor: nil,
+            returnID: AEReturnID(-1),
+            transactionID: AETransactionID(0)
+        )
+        event.setParam(
+            NSAppleEventDescriptor(string: "selectDesktopItem"),
+            forKeyword: AppleEventCode.subroutineName
+        )
+
+        let arguments = NSAppleEventDescriptor.list()
+        arguments.insert(NSAppleEventDescriptor(string: fileURL.path), at: 1)
+        event.setParam(arguments, forKeyword: AppleEventCode.directObject)
+
+        var errorInfo: NSDictionary?
+        _ = script.executeAppleEvent(event, error: &errorInfo)
+        if let errorInfo {
+            // 桌面选中失败时不要回退到 NSWorkspace，否则会重新打开 Desktop 窗口。
+            AppLog.error("高亮 Finder 桌面文件失败：\(errorInfo)", category: .action)
+        }
     }
 }

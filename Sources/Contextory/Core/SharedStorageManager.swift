@@ -99,6 +99,8 @@ public final class SharedStorageManager: @unchecked Sendable {
 
     public enum Keys {
         public static let enableDebugLogging = "enable_debug_logging"
+        /// 宿主 App 提供的独立 Finder 兼容菜单；不影响 FinderSync 扩展本身。
+        public static let finderCompatibilityMenuEnabled = "finder_compatibility_menu_enabled"
         public static let watchedDirectoryPaths = "watched_directory_paths"
         /// 用户通过 Dock 或状态栏明确退出；扩展据此暂停菜单和宿主自动恢复。
         public static let explicitQuitRequested = "explicit_quit_requested"

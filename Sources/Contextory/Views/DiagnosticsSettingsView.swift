@@ -1,5 +1,4 @@
 import SwiftUI
-import FinderSync
 
 struct DiagnosticsSettingsView: View {
     private static let consoleURL = URL(fileURLWithPath: "/System/Applications/Utilities/Console.app")
@@ -120,11 +119,8 @@ struct DiagnosticsSettingsView: View {
 
     private func refresh() {
         isDebugLoggingEnabled = SharedStorageManager.shared.isDebugLoggingEnabled
-        let finderSyncEnabled = FIFinderSyncController.isExtensionEnabled
         DispatchQueue.global(qos: .userInitiated).async {
-            let nextSnapshot = makeRightClickMenuHealthSnapshot(
-                finderSyncControllerEnabled: finderSyncEnabled
-            )
+            let nextSnapshot = makeRightClickMenuHealthSnapshot()
             DispatchQueue.main.async {
                 snapshot = nextSnapshot
             }
