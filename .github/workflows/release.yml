@@ -57,7 +57,7 @@ jobs:
           shasum -a 256 Contextory.dmg Contextory.zip > SHA256SUMS.txt
 
       - name: 上传 Actions 构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Contextory-${{ env.BUILD_VERSION }}-arm64
           path: |

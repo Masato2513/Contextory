@@ -46,8 +46,7 @@ public enum PermissionRefreshCoordinator {
     }
 
     public static let permissionRefreshRelaunchArguments = [
-        LaunchPresentationPolicy.permissionRefreshArgument,
-        LaunchPresentationPolicy.userOpenArgument
+        LaunchPresentationPolicy.permissionRefreshArgument
     ]
 
     @discardableResult
