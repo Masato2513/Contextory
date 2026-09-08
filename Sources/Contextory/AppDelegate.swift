@@ -2,15 +2,14 @@ import Cocoa
 import SwiftUI
 import CoreServices
 import Darwin
-import os.lock
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     
     fileprivate static var instance: AppDelegate?
 
-    /// 设置窗口按需创建，关闭后完整释放 SwiftUI 视图树。
-    /// 后台常驻时只保留状态栏与动作队列，避免为不可见界面长期持有 AttributeGraph。
+    /// 首次打开时创建，之后复用轻量设置窗口，避免销毁、重建与激活策略切换竞态。
     private var window: NSWindow?
+    @MainActor private lazy var settingsSession = SettingsSession()
     private var folderMonitor: SharedFolderMonitor?
     /// File Provider 目录中的 `⌘ + 右键`独立兼容菜单；运行在现有宿主内，不新增进程。
     private var finderCompatibilityMenuController: FinderCompatibilityMenuController?
@@ -21,26 +20,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private var launchedAsLoginItem = false
     /// accessory → regular 切换后，统一在下一轮主线程显示窗口，避免重复打开竞态。
     private var pendingWindowPresentation: DispatchWorkItem?
-    /// 窗口关闭与 Dock 身份切换都由 AppKit 动画驱动，延迟释放可避免在动画事务中销毁视图树。
-    private var pendingWindowRelease: DispatchWorkItem?
-    /// 替换旧的 objc_sync_enter(self)：
-    /// - 旧实现把锁加在 NSObject self 上，和 AppKit 内部隐式锁高度耦合，
-    ///   debug 时一旦死锁，spindump 几乎看不到哪一处先持有；
-    /// - os_unfair_lock 是 Apple 推荐的纯互斥，不参与 runloop，
-    ///   语义只覆盖"PendingActions 消费循环的 critical section"。
-    private var pendingActionLock = os_unfair_lock()
-
-    /// 专用串行队列：所有 processPendingAction 的真实工作都跑在这里。
-    /// 必须用串行队列（不是 .global）：
-    /// - 与 pendingActionLock 配合保证消费循环的 critical section 串行；
-    /// - 同名右键动作短时间内突发 N 次时，按 FIFO 顺序消费，避免文件创建和 HUD
-    ///   在并发 dispatch 路径上互相踩踏；
-    /// - 不挂主线程：避免 applicationDidFinishLaunching 阶段第一笔 dispatch
-    ///   触发 cfprefsd XPC 同步等待时把 main runloop 锁死（压测捕获的 P0 死锁）。
-    private let pendingActionDispatchQueue = DispatchQueue(
-        label: "io.github.masato2513.Contextory.pending-dispatch",
-        qos: .userInitiated
-    )
+    private lazy var pendingActionConsumer = PendingActionConsumer()
     
     func applicationWillFinishLaunching(_ notification: Notification) {
         guard let event = NSAppleEventManager.shared().currentAppleEvent,
@@ -58,6 +38,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
         // 1. 初始化并注册固定的新建文件动作。
         registerDefaultActions()
+        // 在安装任意跨线程回调前初始化，避免 lazy 属性的首次访问竞态。
+        _ = pendingActionConsumer
         
         // 2. 监听来自 Extension 的纯信号通知（双保险机制一：分布式空信号通知，强制指定 suspensionBehavior: .deliverImmediately）
         DistributedNotificationCenter.default().addObserver(
@@ -105,65 +87,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         processPendingAction()
     }
     
-    /// PendingActions 消费的对外入口。任何线程都可以调用，立即返回，
-    /// 不会阻塞调用者（applicationDidFinishLaunching、kqueue 回调、分布式通知都是合法入口）。
-    ///
-    /// 设计原因（压测捕获的 P0 死锁复盘）：
-    /// - 旧实现：在 applicationDidFinishLaunching 主线程上同步消费 PendingActions；
-    ///   reclaim 把孤儿搬回 Pending 后，第一笔 dispatch 一旦走到 SharedHUDManager.show
-    ///   → SharedStorageManager.getBool → cfprefsd XPC 同步等待，main runloop 还没起来，
-    ///   cfprefsd 的回应没人接，进程永久 __ulock_wait 死锁；
-    /// - 修复：消费循环全部下沉到 pendingActionDispatchQueue，主线程 0 阻塞。
+    /// 分布式通知和目录变化共享同一个有界消费者。
     private func processPendingAction() {
-        pendingActionDispatchQueue.async { [weak self] in
-            self?.drainPendingActions()
-        }
+        pendingActionConsumer.signal()
     }
 
-    /// 真正的消费循环（pendingActionDispatchQueue 上跑）。
-    /// 用 trylock 防止两条 async 任务同时进入；新到的回调若发现已有循环在跑直接返回，
-    /// 因为 consumePendingActionLeases 内部自带原子 rename，下一次 FSEvents/通知会自然回来。
-    private func drainPendingActions() {
-        guard os_unfair_lock_trylock(&pendingActionLock) else { return }
-        defer { os_unfair_lock_unlock(&pendingActionLock) }
-        
-        // P1-2：lease 形式拿事件——文件已搬到 InFlight/<pid>/，dispatcher 跑完才 ack 删除。
-        // 中途崩溃/强退都会被下次启动的 reclaim 救回。
-        let leases = SharedStorageManager.shared.consumePendingActionLeases()
-        guard !leases.isEmpty else { return }
-
-        SharedStorageManager.shared.writeLog("[App] [processPendingAction] 开始消费动作队列，事件数: \(leases.count)")
-
-        for lease in leases {
-            let event = lease.event
-            SharedStorageManager.shared.writeLog("[App] [processPendingAction] 成功解析动作: \(event.actionId), 目标路径总数: \(event.paths.count), eventId: \(event.id)")
-
-            let urls = event.paths.map { URL(fileURLWithPath: $0) }
-
-            // 文件 I/O 在专用串行队列执行；需要交互的“其他…”动作会自行切回主线程。
-            SharedStorageManager.shared.writeLog("[App] [processPendingAction] 即将由 ActionDispatcher 分发动作 \(event.actionId)...")
-            let submission = ActionDispatcher.shared.submit(
-                actionId: event.actionId,
-                targetURLs: urls,
-                invocationKind: event.invocationKind
-            ) { status in
-                SharedStorageManager.shared.writeLog(
-                    "[App] [processPendingAction] 动作 \(event.actionId) 到达终态: \(String(describing: status))"
-                )
-                SharedStorageManager.shared.acknowledge(lease)
-            }
-            if submission == .rejected {
-                SharedStorageManager.shared.writeLog(
-                    "[App] [processPendingAction] 动作 \(event.actionId) 未被接管，已按失败终态确认",
-                    level: .error
-                )
-            }
-        }
-    }
-    
     func applicationWillTerminate(_ aNotification: Notification) {
         pendingWindowPresentation?.cancel()
-        pendingWindowRelease?.cancel()
+        pendingActionConsumer.stop()
         finderCompatibilityMenuController?.stop()
         folderMonitor?.stop()
     }
@@ -332,7 +263,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         )
     }
 
-    private func showSettingsWindowIfNeededForLaunch() {
+    @MainActor private func showSettingsWindowIfNeededForLaunch() {
         guard LaunchPresentationPolicy.shouldShowSettingsWindowOnLaunch(
             silentLaunchEnabled: isSilentLaunchEnabled,
             arguments: CommandLine.arguments,
@@ -366,15 +297,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
     }
     
-    @objc private func showSettingsWindow() {
+    @MainActor @objc private func showSettingsWindow() {
         pendingWindowPresentation?.cancel()
         pendingWindowPresentation = nil
-        // 用户可能在关闭动画尚未结束时重新打开；此时继续复用原窗口，取消延迟回收。
-        pendingWindowRelease?.cancel()
-        pendingWindowRelease = nil
-
         // 设置页可见期间恢复标准 App 身份：展示 Dock 图标，并提供系统级退出入口。
-        let settingsWindow = window ?? makeSettingsWindow()
         guard NSApp.setActivationPolicy(.regular) else {
             SharedStorageManager.shared.writeLog(
                 "[App] 无法切换为标准窗口模式",
@@ -383,22 +309,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             return
         }
 
+        let settingsWindow = window ?? makeSettingsWindow()
+
         // 激活策略切换由 AppKit 提交到当前事件循环；下一轮再抢焦点，首次双击即可稳定显示。
         let presentation = DispatchWorkItem { [weak self, weak settingsWindow] in
-            guard let self,
-                  let settingsWindow,
-                  self.window === settingsWindow else { return }
-            NSApp.activate(ignoringOtherApps: true)
-            settingsWindow.makeKeyAndOrderFront(nil)
-            self.pendingWindowPresentation = nil
+            MainActor.assumeIsolated {
+                guard let self,
+                      let settingsWindow,
+                      self.window === settingsWindow else { return }
+                if settingsWindow.isMiniaturized { settingsWindow.deminiaturize(nil) }
+                settingsWindow.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                self.settingsSession.setVisible(true)
+                self.pendingWindowPresentation = nil
+            }
         }
         pendingWindowPresentation = presentation
         DispatchQueue.main.async(execute: presentation)
     }
 
     /// SwiftUI 是设置页需要的重型界面层，不能在每次后台启动时预先实例化。
-    /// 窗口关闭后会由 `windowWillClose` 清空，因此下次打开时重建最新状态。
-    private func makeSettingsWindow() -> NSWindow {
+    /// 关闭后保留界面和导航状态，重新显示时统一刷新数据。
+    @MainActor private func makeSettingsWindow() -> NSWindow {
         let settingsWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 850, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -406,17 +338,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             defer: true
         )
         settingsWindow.delegate = self
-        // 由 AppDelegate 在关闭动画结束后统一释放，避免 AppKit 与 ARC 同时回收 NSWindow。
+        // 生命周期由 AppDelegate 持有；关闭仅隐藏，不释放窗口。
         settingsWindow.isReleasedWhenClosed = false
         settingsWindow.title = "右键助手"
         settingsWindow.center()
         settingsWindow.setFrameAutosaveName("MainWindow")
-        settingsWindow.contentView = NSHostingView(rootView: ContentView())
+        settingsWindow.contentView = NSHostingView(rootView: ContentView().environmentObject(settingsSession))
         window = settingsWindow
         return settingsWindow
     }
 
-    @objc private func toggleSilentLaunch(_ sender: NSMenuItem) {
+    @MainActor @objc private func toggleSilentLaunch(_ sender: NSMenuItem) {
         let newValue = !isSilentLaunchEnabled
         guard SharedStorageManager.shared.setBool(
             newValue,
@@ -431,6 +363,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             return
         }
         sender.state = newValue ? .on : .off
+        settingsSession.refresh(afterChanges: true)
         SharedHUDManager.show(
             title: newValue ? "静默启动已启用" : "静默启动已关闭",
             content: newValue ? "后台拉起时仅保留菜单栏图标" : "下次启动会直接显示设置窗口",
@@ -470,37 +403,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
         pendingWindowPresentation?.cancel()
         pendingWindowPresentation = nil
-        pendingWindowRelease?.cancel()
+        settingsSession.setVisible(false)
 
-        // windowWillClose 发生时 AppKit 的窗口/Dock 动画事务仍可能持有窗口图层。
-        // 当前 runloop 只切回菜单栏身份，再给 AppKit 一个完整动画周期后释放 SwiftUI 视图树；
-        // 否则在 _NSWindowTransformAnimation dealloc 阶段清空 contentView 可能触发野指针。
-        let releaseWork = DispatchWorkItem { [weak self, weak closingWindow] in
-            guard let self,
-                  let closingWindow,
-                  self.window === closingWindow,
-                  !closingWindow.isVisible else { return }
-
-            closingWindow.delegate = nil
-            closingWindow.contentView = nil
-            self.window = nil
-            self.pendingWindowRelease = nil
-            // SwiftUI 视图树已释放；仅在关闭设置页时请求 malloc 归还空闲页，不增加后台轮询。
-            let reclaimedBytes = malloc_zone_pressure_relief(nil, 0)
-            SharedStorageManager.shared.writeLog(
-                "[App] 设置窗口已安全释放，已请求回收 \(reclaimedBytes) 字节，宿主继续以轻量菜单栏模式运行"
-            )
-        }
-        pendingWindowRelease = releaseWork
-
+        // 只在下一轮事件循环隐藏 Dock 身份，不销毁视图，也不使用固定延时回收。
         DispatchQueue.main.async { [weak self, weak closingWindow] in
             guard let self,
                   let closingWindow,
                   self.window === closingWindow,
                   !closingWindow.isVisible else { return }
-
             NSApp.setActivationPolicy(.accessory)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: releaseWork)
         }
     }
     

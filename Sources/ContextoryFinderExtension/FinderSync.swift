@@ -39,6 +39,7 @@ class FinderSync: FIFinderSync {
     private static var nextTag: Int = 1000
     private var currentObservedPathCount = 0
     private var isPausedByUser = SharedStorageManager.shared.isExplicitQuitRequested
+    private var isDebugLoggingEnabled = SharedStorageManager.shared.isDebugLoggingEnabled
     private var menuIconAppearanceMode = MenuIconAppearance.current
     private lazy var menuIconAppearance = menuIconAppearanceMode.appearance
     private var menuIconCache: [String: NSImage] = [:]
@@ -148,8 +149,6 @@ class FinderSync: FIFinderSync {
             object: nil
         )
 
-        // 3. 在插件进程中初始化固定的新建文件动作集。
-        DefaultActionRegistry.registerAll()
 
         // 不在扩展初始化阶段主动拉起宿主：Finder 重载与用户双击可能同时发生，
         // 两条 Launch Services 请求竞态会造成重复宿主。宿主由手动/登录启动，
@@ -184,6 +183,7 @@ class FinderSync: FIFinderSync {
     
     @objc private func configChanged() {
         isPausedByUser = SharedStorageManager.shared.isExplicitQuitRequested
+        isDebugLoggingEnabled = SharedStorageManager.shared.isDebugLoggingEnabled
         logToSharedContainer("[FinderSync] 收到配置变更，刷新监听路径")
         updateObservedDirectories()
         
@@ -211,11 +211,12 @@ class FinderSync: FIFinderSync {
     }
     
     /// 将日志写入统一 OSLog。调试日志默认不持久化，避免生产环境记录菜单渲染细节。
-    private func logToSharedContainer(_ message: String, level: SharedLogLevel = .info) {
+    private func logToSharedContainer(_ message: @autoclosure () -> String, level: SharedLogLevel = .info) {
+        guard level != .debug || isDebugLoggingEnabled else { return }
         switch level {
-        case .info:  AppLog.info(message, category: .ext)
-        case .debug: AppLog.debug(message, category: .ext)
-        case .error: AppLog.error(message, category: .ext)
+        case .info:  AppLog.info(message(), category: .ext)
+        case .debug: AppLog.debug(message(), category: .ext)
+        case .error: AppLog.error(message(), category: .ext)
         }
     }
     
@@ -277,19 +278,17 @@ class FinderSync: FIFinderSync {
         let invocationKind: ActionInvocationKind = menuKind == .contextualMenuForContainer
             ? .container
             : .items
-        let isContainer = invocationKind == .container
         
         let menu = NSMenu(title: "右键助手")
         
-        let dispatcher = ActionDispatcher.shared
         let parent = NSMenuItem(title: "新建文件", action: nil, keyEquivalent: "")
+        parent.image = makeMenuIcon(
+            named: "doc.badge.plus",
+            accessibilityDescription: "新建文件"
+        )
         let submenu = NSMenu(title: "新建文件")
-        for descriptor in DefaultActionRegistry.makeActions() {
-            guard descriptor.isAvailable(for: targetURLs, isContainer: isContainer),
-                  let action = dispatcher.action(forId: descriptor.actionId) else {
-                continue
-            }
-            submenu.addItem(makeMenuItem(for: action, invocationKind: invocationKind))
+        for descriptor in FileActionDescriptor.all {
+            submenu.addItem(makeMenuItem(for: descriptor, invocationKind: invocationKind))
         }
         if !submenu.items.isEmpty {
             parent.submenu = submenu
@@ -302,7 +301,7 @@ class FinderSync: FIFinderSync {
     }
 
     private func makeMenuItem(
-        for action: MenuAction,
+        for action: FileActionDescriptor,
         invocationKind: ActionInvocationKind
     ) -> NSMenuItem {
         let item = NSMenuItem(
@@ -313,12 +312,10 @@ class FinderSync: FIFinderSync {
         item.tag = FinderSync.getTag(for: action.actionId, invocationKind: invocationKind)
         item.target = self
 
-        if let iconName = action.iconName {
-            item.image = makeMenuIcon(
-                named: iconName,
-                accessibilityDescription: action.localizedTitle
-            )
-        }
+        item.image = makeMenuIcon(
+            named: action.iconName,
+            accessibilityDescription: action.localizedTitle
+        )
 
         return item
     }

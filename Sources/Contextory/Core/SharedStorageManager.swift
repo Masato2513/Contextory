@@ -99,6 +99,8 @@ public final class SharedStorageManager: @unchecked Sendable {
 
     public enum Keys {
         public static let enableDebugLogging = "enable_debug_logging"
+        /// 文件创建等成功操作的 HUD 提示；错误提示不受此开关影响。
+        public static let enableSuccessHUD = "enable_success_hud"
         /// 宿主 App 提供的独立 Finder 兼容菜单；不影响 FinderSync 扩展本身。
         public static let finderCompatibilityMenuEnabled = "finder_compatibility_menu_enabled"
         public static let watchedDirectoryPaths = "watched_directory_paths"
@@ -460,7 +462,8 @@ public final class SharedStorageManager: @unchecked Sendable {
     /// 2. dispatcher 跑完后必须显式 `acknowledge`，否则下次启动 `reclaimAbandonedInFlightActions`
     ///    会把它搬回 PendingActions 重跑（at-least-once）；
     /// 3. decode 失败的文件直接搬到 FailedActions 隔离，不阻塞队列。
-    public func consumePendingActionLeases() -> [PendingActionLease] {
+    public func consumePendingActionLeases(limit: Int = .max) -> [PendingActionLease] {
+        guard limit > 0 else { return [] }
         var leases: [PendingActionLease] = []
         let directoryURL = pendingActionsDirectoryURL
 
@@ -484,6 +487,8 @@ public final class SharedStorageManager: @unchecked Sendable {
         let inFlightDir = currentProcessInFlightDirectoryURL
 
         for url in sortedURLs {
+            // 未领取事件继续留在磁盘，避免积压时同时持有全部解码后的路径数组。
+            guard leases.count < limit else { break }
             // Step 1: 原子 rename 到 InFlight。极小概率同名时附加 UUID 前缀。
             var inFlightURL = inFlightDir.appendingPathComponent(url.lastPathComponent)
             if FileManager.default.fileExists(atPath: inFlightURL.path) {
@@ -510,7 +515,7 @@ public final class SharedStorageManager: @unchecked Sendable {
 
         // 兼容旧 pending_action.json 单文件路径：直接消费（无事务），保持向后兼容。
         // 新版扩展不会再写此文件，留下来仅为升级残留。
-        if let legacyEvent = consumeLegacyPendingActionEvent() {
+        if leases.count < limit, let legacyEvent = consumeLegacyPendingActionEvent() {
             leases.append(PendingActionLease(event: legacyEvent, inFlightURL: nil))
         }
 

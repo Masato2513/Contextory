@@ -246,10 +246,13 @@ HOST_SOURCES="
     Sources/Contextory/Views/FinderSettingsView.swift \
     Sources/Contextory/Views/DiagnosticsSettingsView.swift \
     Sources/Contextory/Views/SettingsComponents.swift \
+    Sources/Contextory/Views/SettingsSession.swift \
     Sources/Contextory/Core/MenuAction.swift \
     Sources/Contextory/Core/DefaultActionRegistry.swift \
+    Sources/Contextory/Core/FileActionDescriptor.swift \
     Sources/Contextory/Core/SharedStorageManager.swift \
     Sources/Contextory/Core/SharedFolderMonitor.swift \
+    Sources/Contextory/Core/PendingActionConsumer.swift \
     Sources/Contextory/Core/ActionDispatcher.swift \
     Sources/Contextory/Core/SharedHUDManager.swift \
     Sources/Contextory/Core/FullDiskAccessChecker.swift \
@@ -266,15 +269,10 @@ HOST_SOURCES="
 
 EXT_SOURCES="
     Sources/ContextoryFinderExtension/FinderSync.swift \
-    Sources/Contextory/Core/MenuAction.swift \
-    Sources/Contextory/Core/DefaultActionRegistry.swift \
+    Sources/Contextory/Core/FileActionDescriptor.swift \
     Sources/Contextory/Core/SharedStorageManager.swift \
-    Sources/Contextory/Core/ActionDispatcher.swift \
-    Sources/Contextory/Core/SharedHUDManager.swift \
-    Sources/Contextory/Core/FullDiskAccessChecker.swift \
     Sources/Contextory/Core/LaunchPresentationPolicy.swift \
     Sources/Contextory/Core/ExtensionHeartbeat.swift \
-    Sources/Contextory/Core/Actions/NewFileAction.swift \
     Sources/Contextory/Core/Logging/AppLog.swift \
     Sources/Contextory/Core/Distribution.swift
 "

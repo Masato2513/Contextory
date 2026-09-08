@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct PermissionsSettingsView: View {
+    @EnvironmentObject private var session: SettingsSession
     @State private var hasFullDiskAccess = false
     @State private var hasLoadedInitialFullDiskAccess = false
     @State private var didPromptAfterFullDiskAccessGrant = false
@@ -9,17 +10,15 @@ struct PermissionsSettingsView: View {
     @State private var watchScope: WatchScope = .everywhere
     @State private var isCompatibilityMenuEnabled = false
     @State private var hasAccessibilityAccess = false
-    // 改事件驱动：不再用 2s 轮询，避免 App 在后台空跑 timer。
-    // 状态刷新由三处事件触发：onAppear、willBecomeActive（用户从系统设置切回时）、
-    // 以及 FDA HStack 内的「重新检测」按钮（用户已知刚授权完想立刻确认）。
+    // 统一窗口检测完成后刷新当前页面；隐藏窗口期间不进行权限检查。
 
     var body: some View {
-        Form {
-            Section("Finder 扩展") {
+        SettingsForm {
+            SettingsSection("Finder 扩展") {
                 ExtensionRegistrationBox()
             }
 
-            Section("云盘兼容菜单") {
+            SettingsSection("云盘兼容菜单") {
                 Toggle("启用 ⌘ + 右键兼容菜单", isOn: Binding(
                     get: { isCompatibilityMenuEnabled },
                     set: saveCompatibilityMenu
@@ -62,7 +61,7 @@ struct PermissionsSettingsView: View {
                 }
             }
 
-            Section("右键菜单范围") {
+            SettingsSection("右键菜单范围") {
                 Picker("作用范围", selection: Binding(
                     get: { watchScope },
                     set: saveWatchScope
@@ -73,7 +72,7 @@ struct PermissionsSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
-            Section("自定义目录") {
+            SettingsSection("自定义目录") {
                 if watchedDirectoryPaths.isEmpty {
                     Text("暂无目录")
                         .foregroundStyle(.secondary)
@@ -116,7 +115,7 @@ struct PermissionsSettingsView: View {
             }
             .disabled(watchScope == .everywhere)
 
-            Section("文件访问") {
+            SettingsSection("文件访问") {
                 HStack(spacing: 10) {
                     Label(
                         hasFullDiskAccess ? "完全磁盘访问已授权" : "完全磁盘访问尚未授权",
@@ -139,7 +138,7 @@ struct PermissionsSettingsView: View {
                     }
 
                     Button {
-                        refresh(promptOnFullDiskAccessGrant: true)
+                        session.refresh(afterChanges: true)
                     } label: {
                         Label("重新检测", systemImage: "arrow.clockwise")
                     }
@@ -159,10 +158,9 @@ struct PermissionsSettingsView: View {
                 }
             }
         }
-        .formStyle(.grouped)
-        .onAppear { refresh(promptOnFullDiskAccessGrant: false) }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willBecomeActiveNotification)) { _ in
-            refresh(promptOnFullDiskAccessGrant: true)
+        .onChange(of: session.revision, initial: true) {
+            guard session.isVisible else { return }
+            refresh(promptOnFullDiskAccessGrant: hasLoadedInitialFullDiskAccess)
         }
     }
 
@@ -176,6 +174,7 @@ struct PermissionsSettingsView: View {
         }
         watchScope = newValue
         postConfigChanged()
+        session.refresh(afterChanges: true)
     }
 
     private func refresh(promptOnFullDiskAccessGrant: Bool) {
@@ -240,6 +239,7 @@ struct PermissionsSettingsView: View {
         }
         refresh(promptOnFullDiskAccessGrant: false)
         postConfigChanged()
+        session.refresh(afterChanges: true)
     }
 
     private func saveWatchedDirectories(_ paths: [String]) {
@@ -252,11 +252,13 @@ struct PermissionsSettingsView: View {
         }
         watchedDirectoryPaths = paths
         postConfigChanged()
+        session.refresh(afterChanges: true)
     }
 
     private func checkFullDiskAccess(promptOnGrant: Bool) {
+        guard let snapshot = session.snapshot else { return }
         let previous = hasFullDiskAccess
-        let current = FullDiskAccessChecker.hasFullDiskAccess()
+        let current = snapshot.fullDiskAccessState == .granted
         hasFullDiskAccess = current
 
         if current {

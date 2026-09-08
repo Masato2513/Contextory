@@ -1,16 +1,17 @@
 import SwiftUI
 
 struct DiagnosticsSettingsView: View {
+    @EnvironmentObject private var session: SettingsSession
     private static let consoleURL = URL(fileURLWithPath: "/System/Applications/Utilities/Console.app")
     private static let logQuery = "subsystem == \"io.github.masato2513.Contextory\""
 
-    @State private var snapshot: RightClickMenuHealthSnapshot?
+    private var snapshot: RightClickMenuHealthSnapshot? { session.snapshot }
     @State private var isDebugLoggingEnabled = false
     @State private var isRepairRunning = false
 
     var body: some View {
-        Form {
-            Section("运行状态") {
+        SettingsForm {
+            SettingsSection("运行状态") {
                 if let snapshot {
                     SettingsStatusRow(
                         title: "右键菜单服务",
@@ -40,7 +41,7 @@ struct DiagnosticsSettingsView: View {
                 .disabled(isRepairRunning)
             }
 
-            Section("建议修复") {
+            SettingsSection("建议修复") {
                 if let snapshot {
                     if snapshot.recommendedRepairAction == .none {
                         Label("当前无需修复", systemImage: "checkmark.circle.fill")
@@ -75,7 +76,7 @@ struct DiagnosticsSettingsView: View {
                 }
             }
 
-            Section("支持工具") {
+            SettingsSection("支持工具") {
                 Button(action: copyDiagnosticReport) {
                     Label("复制诊断报告", systemImage: "doc.on.doc")
                 }
@@ -99,7 +100,7 @@ struct DiagnosticsSettingsView: View {
                 .disabled((snapshot?.failedActionCount ?? 0) == 0)
             }
 
-            Section("日志") {
+            SettingsSection("日志") {
                 Toggle("启用详细调试日志", isOn: Binding(
                     get: { isDebugLoggingEnabled },
                     set: saveDebugLogging
@@ -110,21 +111,15 @@ struct DiagnosticsSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
-        .onAppear(perform: refresh)
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willBecomeActiveNotification)) { _ in
-            refresh()
+        .onChange(of: session.revision, initial: true) {
+            guard session.isVisible else { return }
+            isDebugLoggingEnabled = SharedStorageManager.shared.isDebugLoggingEnabled
         }
     }
 
     private func refresh() {
         isDebugLoggingEnabled = SharedStorageManager.shared.isDebugLoggingEnabled
-        DispatchQueue.global(qos: .userInitiated).async {
-            let nextSnapshot = makeRightClickMenuHealthSnapshot()
-            DispatchQueue.main.async {
-                snapshot = nextSnapshot
-            }
-        }
+        session.refresh(afterChanges: true)
     }
 
     private func runRecommendedAction(_ action: RecommendedRepairAction) {
@@ -256,6 +251,7 @@ struct DiagnosticsSettingsView: View {
             return
         }
         isDebugLoggingEnabled = enabled
+        postConfigChanged()
     }
 
     private func menuServiceLevel(_ snapshot: RightClickMenuHealthSnapshot) -> SettingsStatusLevel {

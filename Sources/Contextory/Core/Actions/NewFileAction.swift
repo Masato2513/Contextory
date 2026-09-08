@@ -1,31 +1,8 @@
 import AppKit
 import Foundation
 
-/// Finder 菜单中提供的一键新建文件类型。
-public enum SupportedFileType: String, CaseIterable, Codable, Identifiable, Sendable {
-    case txt
-    case md
-    case json
-    case docx
-    case xlsx
-    case pptx
-    case pdf
-
-    public var id: String { rawValue }
-    public var extensionName: String { rawValue }
-
-    public var displayName: String {
-        switch self {
-        case .txt: return "文本文件 (.txt)"
-        case .md: return "Markdown (.md)"
-        case .json: return "JSON (.json)"
-        case .docx: return "Word 文档 (.docx)"
-        case .xlsx: return "Excel 表格 (.xlsx)"
-        case .pptx: return "PowerPoint 演示文稿 (.pptx)"
-        case .pdf: return "PDF 文档 (.pdf)"
-        }
-    }
-
+// 文件类型与菜单元数据放在纯 Foundation 描述层，扩展无需链接文件执行代码。
+extension SupportedFileType {
     /// Office 文件和 PDF 必须包含有效结构；普通文本类保持真正的空文件。
     public var defaultEmptyBytes: Data {
         switch self {
@@ -99,7 +76,7 @@ public enum NewFileCreator {
         return ["docx", "xlsx", "pptx", "pdf"].contains(pathExtension)
     }
 
-    /// 同名时从 2 开始递增，例如“新建文件.md”→“新建文件 2.md”。
+    /// 同名时从 2 开始递增，例如“新建文档.docx”→“新建文档 2.docx”。
     public static func availableURL(
         in directory: URL,
         requestedName: String,
@@ -146,18 +123,10 @@ public final class NewFileAction: MenuAction, @unchecked Sendable {
     public init(fileType: SupportedFileType, customTemplateURL: URL? = nil) {
         self.fileType = fileType
         self.customTemplateURL = customTemplateURL
-        actionId = "io.github.masato2513.Contextory.action.newfile.\(fileType.rawValue)"
-        localizedTitle = fileType.displayName
-
-        switch fileType {
-        case .txt: iconName = "doc.text"
-        case .md: iconName = "doc.text.fill"
-        case .json: iconName = "curlybraces"
-        case .docx: iconName = "doc.richtext"
-        case .xlsx: iconName = "tablecells.fill"
-        case .pptx: iconName = "rectangle.stack.fill"
-        case .pdf: iconName = "doc.fill"
-        }
+        let descriptor = FileActionDescriptor(fileType: fileType)
+        actionId = descriptor.actionId
+        localizedTitle = descriptor.localizedTitle
+        iconName = descriptor.iconName
     }
 
     public func execute(targetURLs: [URL]) -> Bool {
@@ -184,7 +153,7 @@ public final class NewFileAction: MenuAction, @unchecked Sendable {
 
         return createAndReveal(
             targetURL: targetURL,
-            requestedName: "新建文件.\(fileType.extensionName)",
+            requestedName: fileType.defaultFileName,
             data: fileData
         )
     }
@@ -192,9 +161,9 @@ public final class NewFileAction: MenuAction, @unchecked Sendable {
 
 /// 低频格式入口：用户输入完整文件名和后缀，创建真正的空文件。
 public final class OtherNewFileAction: MenuAction, @unchecked Sendable {
-    public let actionId = "io.github.masato2513.Contextory.action.newfile.other"
-    public let localizedTitle = "其他…"
-    public let iconName: String? = "doc.badge.plus"
+    public let actionId = FileActionDescriptor.other.actionId
+    public let localizedTitle = FileActionDescriptor.other.localizedTitle
+    public let iconName: String? = FileActionDescriptor.other.iconName
 
     public func execute(targetURLs: [URL]) -> Bool {
         guard let targetURL = targetURLs.first else { return false }

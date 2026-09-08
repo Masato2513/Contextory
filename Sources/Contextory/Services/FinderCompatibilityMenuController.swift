@@ -438,16 +438,19 @@ final class FinderCompatibilityMenuController: NSObject, NSMenuDelegate {
     }
 
     private func buildMenu(targetURL: URL) -> NSMenu {
-        let menu = NSMenu(title: "新建文件")
+        let menu = NSMenu(title: "右键助手")
         menu.autoenablesItems = false
 
-        let dispatcher = ActionDispatcher.shared
-        for descriptor in DefaultActionRegistry.makeActions() {
-            guard descriptor.isAvailable(for: [targetURL], isContainer: true),
-                  let action = dispatcher.action(forId: descriptor.actionId) else {
-                continue
-            }
+        let parent = NSMenuItem(title: "新建文件", action: nil, keyEquivalent: "")
+        parent.image = menuIcon(
+            named: "doc.badge.plus",
+            accessibilityDescription: "新建文件"
+        )
 
+        let submenu = NSMenu(title: "新建文件")
+        submenu.autoenablesItems = false
+
+        for action in FileActionDescriptor.all {
             let item = NSMenuItem(
                 title: action.localizedTitle,
                 action: #selector(performCompatibilityAction(_:)),
@@ -463,8 +466,12 @@ final class FinderCompatibilityMenuController: NSObject, NSMenuDelegate {
                 named: action.iconName,
                 accessibilityDescription: action.localizedTitle
             )
-            menu.addItem(item)
+            submenu.addItem(item)
         }
+
+        guard !submenu.items.isEmpty else { return menu }
+        parent.submenu = submenu
+        menu.addItem(parent)
 
         return menu
     }

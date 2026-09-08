@@ -133,8 +133,9 @@ struct SettingsStatusRow: View {
 
 // MARK: - Finder extension management
 struct ExtensionRegistrationBox: View {
+    @EnvironmentObject private var session: SettingsSession
     @State private var isRegistering = false
-    @State private var extensionState: FinderExtensionRegistrationState?
+    private var extensionState: FinderExtensionRegistrationState? { session.snapshot?.finderExtensionState }
 
     private var isExtensionEnabled: Bool {
         extensionState == .enabled
@@ -171,19 +172,11 @@ struct ExtensionRegistrationBox: View {
                 Label("扩展设置", systemImage: "gearshape")
             }
         }
-        .onAppear(perform: refresh)
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willBecomeActiveNotification)) { _ in
-            refresh()
-        }
+
     }
 
     private func refresh() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let state = queryFinderExtensionRegistrationState()
-            DispatchQueue.main.async {
-                extensionState = state
-            }
-        }
+        session.refresh(afterChanges: true)
     }
 
     private var registrationButton: some View {
@@ -220,7 +213,8 @@ struct ExtensionRegistrationBox: View {
 
 // MARK: - Extension readiness
 struct ExtensionStatusBanner: View {
-    @State private var snapshot: RightClickMenuHealthSnapshot?
+    @EnvironmentObject private var session: SettingsSession
+    private var snapshot: RightClickMenuHealthSnapshot? { session.snapshot }
     @State private var isRepairRunning = false
 
     var body: some View {
@@ -271,19 +265,11 @@ struct ExtensionStatusBanner: View {
                     .controlSize(.small)
             }
         }
-        .onAppear(perform: checkStatus)
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willBecomeActiveNotification)) { _ in
-            checkStatus()
-        }
+
     }
 
     private func checkStatus() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let nextSnapshot = makeRightClickMenuHealthSnapshot()
-            DispatchQueue.main.async {
-                snapshot = nextSnapshot
-            }
-        }
+        session.refresh(afterChanges: true)
     }
 
     private func runRecommendedAction(_ snapshot: RightClickMenuHealthSnapshot) {

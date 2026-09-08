@@ -27,23 +27,37 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
 public struct ContentView: View {
     @State private var selectedTab: SidebarItem = .overview
+    @EnvironmentObject private var session: SettingsSession
 
     public init() {}
 
     public var body: some View {
-        NavigationSplitView {
-            List(SidebarItem.allCases, selection: $selectedTab) { item in
-                NavigationLink(value: item) {
-                    Label(item.title, systemImage: item.iconName)
-                        .font(.body)
-                        .padding(.vertical, 2)
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(SidebarItem.allCases) { item in
+                    Button {
+                        selectedTab = item
+                    } label: {
+                        Label(item.title, systemImage: item.iconName)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(selectedTab == item ? Color.accentColor.opacity(0.15) : .clear,
+                                in: RoundedRectangle(cornerRadius: 6))
+                    .accessibilityAddTraits(selectedTab == item ? .isSelected : [])
                 }
+                Spacer()
             }
-            .listStyle(.sidebar)
-            .navigationTitle("右键助手")
-            .frame(minWidth: 180, idealWidth: 190, maxWidth: 220)
+            .padding(12)
+            .frame(width: 180)
+            .frame(maxHeight: .infinity)
+            .background(Color(NSColor.controlBackgroundColor))
 
-        } detail: {
+            Divider()
+
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     Text(selectedTab.title)
@@ -59,6 +73,9 @@ public struct ContentView: View {
             .background(Color(NSColor.windowBackgroundColor))
         }
         .frame(minWidth: 850, minHeight: 600)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willBecomeActiveNotification)) { _ in
+            session.refresh()
+        }
     }
 
     @ViewBuilder

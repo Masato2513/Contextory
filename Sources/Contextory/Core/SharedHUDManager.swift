@@ -5,7 +5,8 @@ import AppKit
 /// 提供带微动画、支持毛玻璃特效的屏幕顶部中央紧凑型通知。
 /// 实现了高内聚低耦合、接口隔离与完全双写配置感知（注2、注4）。
 public final class SharedHUDManager {
-    @MainActor private static weak var activePanel: NSPanel?
+    @MainActor private static var activePanel: NSPanel?
+    @MainActor private static var automaticDismissTask: Task<Void, Never>?
     /// HUD 启用 Esc 关闭时，记录当前的 NSEvent 监听 token，便于关闭时移除避免泄漏。
     @MainActor private static var activeKeyMonitor: Any?
 
@@ -29,7 +30,10 @@ public final class SharedHUDManager {
         // 1. 成功通知静默过滤。
         // 当用户在设置中关闭了“启用操作成功悬浮通知”后，成功的日常 HUD 提示保持静默；
         // 错误/失败 HUD 仍会显示，便于发现权限或系统拦截问题。
-        let isHUDEnabled = SharedStorageManager.shared.getBool(forKey: "enable_success_hud", defaultValue: true)
+        let isHUDEnabled = SharedStorageManager.shared.getBool(
+            forKey: SharedStorageManager.Keys.enableSuccessHUD,
+            defaultValue: false
+        )
         if isSuccess && !isHUDEnabled {
             print("[SharedHUD] 成功提示静默过滤拦截: \(title) - \(content)")
             return
@@ -48,6 +52,8 @@ public final class SharedHUDManager {
         isSuccess: Bool
     ) {
             // 2. 经典防冲突重叠机制：如果已有悬浮窗，立即物理关闭并回收
+            automaticDismissTask?.cancel()
+            automaticDismissTask = nil
             if let existing = activePanel {
                 existing.close()
                 activePanel = nil
@@ -84,6 +90,7 @@ public final class SharedHUDManager {
             )
             
             activePanel = panel
+            panel.isReleasedWhenClosed = false
             
             panel.level = .floating
             panel.backgroundColor = .clear
@@ -171,8 +178,9 @@ public final class SharedHUDManager {
                 context.timingFunction = CAMediaTimingFunction(controlPoints: 0.15, 0.85, 0.35, 1.1)
                 panel.animator().setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
                 panel.animator().alphaValue = 1.0
-            }, completionHandler: {
+            }, completionHandler: { [weak panel] in
                 Task { @MainActor in
+                    guard let panel, activePanel === panel else { return }
                     scheduleAutomaticDismiss(panel, animated: true)
                 }
             })
@@ -180,9 +188,14 @@ public final class SharedHUDManager {
 
     @MainActor
     private static func scheduleAutomaticDismiss(_ panel: NSPanel, animated: Bool) {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            guard activePanel === panel else { return }
+        guard activePanel === panel else { return }
+        automaticDismissTask?.cancel()
+        automaticDismissTask = Task { @MainActor [weak panel] in
+            do {
+                try await Task.sleep(nanoseconds: 2_500_000_000)
+            } catch { return }
+            guard let panel, activePanel === panel else { return }
+            automaticDismissTask = nil
             dismissPanel(panel, animated: animated)
         }
     }
@@ -190,6 +203,8 @@ public final class SharedHUDManager {
     @MainActor
     private static func dismissPanel(_ panel: NSPanel, animated: Bool) {
         guard activePanel === panel else { return }
+        automaticDismissTask?.cancel()
+        automaticDismissTask = nil
         if !animated {
             closePanel(panel)
             return

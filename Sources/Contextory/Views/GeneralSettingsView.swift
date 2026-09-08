@@ -1,9 +1,10 @@
 import SwiftUI
 
 struct OverviewSettingsView: View {
+    @EnvironmentObject private var session: SettingsSession
     @State private var isLaunchEnabled = false
     @State private var isSilentLaunchEnabled = true
-    @State private var showsSuccessHUD = true
+    @State private var showsSuccessHUD = false
 
     private var launchEnabledBinding: Binding<Bool> {
         Binding(
@@ -34,12 +35,12 @@ struct OverviewSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("服务状态") {
+        SettingsForm {
+            SettingsSection("服务状态") {
                 ExtensionStatusBanner()
             }
 
-            Section("启动") {
+            SettingsSection("启动") {
                 Toggle("登录时启动右键助手", isOn: launchEnabledBinding)
 
                 Toggle("后台启动时保持静默", isOn: Binding(
@@ -48,14 +49,14 @@ struct OverviewSettingsView: View {
                 ))
             }
 
-            Section("反馈") {
+            SettingsSection("反馈") {
                 Toggle("显示成功提示", isOn: Binding(
                     get: { showsSuccessHUD },
                     set: saveSuccessHUD
                 ))
             }
 
-            Section("关于") {
+            SettingsSection("关于") {
                 LabeledContent("版本") {
                     Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "未知")
                         .foregroundStyle(.secondary)
@@ -70,9 +71,8 @@ struct OverviewSettingsView: View {
                 }
             }
         }
-        .formStyle(.grouped)
-        .onAppear(perform: refresh)
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willBecomeActiveNotification)) { _ in
+        .onChange(of: session.revision, initial: true) {
+            guard session.isVisible else { return }
             refresh()
         }
     }
@@ -84,8 +84,8 @@ struct OverviewSettingsView: View {
             defaultValue: true
         )
         showsSuccessHUD = SharedStorageManager.shared.getBool(
-            forKey: "enable_success_hud",
-            defaultValue: true
+            forKey: SharedStorageManager.Keys.enableSuccessHUD,
+            defaultValue: false
         )
     }
 
@@ -101,7 +101,10 @@ struct OverviewSettingsView: View {
     }
 
     private func saveSuccessHUD(_ enabled: Bool) {
-        guard SharedStorageManager.shared.setBool(enabled, forKey: "enable_success_hud") else {
+        guard SharedStorageManager.shared.setBool(
+            enabled,
+            forKey: SharedStorageManager.Keys.enableSuccessHUD
+        ) else {
             showConfigurationSaveFailure("成功提示")
             return
         }

@@ -116,10 +116,13 @@ final class ContextoryTests: XCTestCase {
     }
 
     func testCustomOfficeTemplatesAreWrittenWithoutModification() throws {
-        let template = Data([0x50, 0x4B, 0x03, 0x04, 0x01, 0x02, 0x03])
         let officeTypes: [SupportedFileType] = [.docx, .xlsx, .pptx]
 
         for fileType in officeTypes {
+            let bundledTemplate = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Resources/Templates/blank.\(fileType.extensionName)")
+            let template = try Data(contentsOf: bundledTemplate)
             let templateURL = temporaryDirectory
                 .appendingPathComponent("template.\(fileType.extensionName)")
             try template.write(to: templateURL)
@@ -134,7 +137,7 @@ final class ContextoryTests: XCTestCase {
             XCTAssertTrue(action.execute(targetURLs: [outputDirectory]))
 
             let output = outputDirectory
-                .appendingPathComponent("新建文件.\(fileType.extensionName)")
+                .appendingPathComponent(fileType.defaultFileName)
             XCTAssertEqual(try Data(contentsOf: output), template)
         }
     }
