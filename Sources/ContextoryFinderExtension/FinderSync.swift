@@ -287,13 +287,14 @@ class FinderSync: FIFinderSync {
             accessibilityDescription: "新建文件"
         )
         let submenu = NSMenu(title: "新建文件")
-        for descriptor in FileActionDescriptor.all {
+        for descriptor in FileActionDescriptor.newFileActions {
             submenu.addItem(makeMenuItem(for: descriptor, invocationKind: invocationKind))
         }
         if !submenu.items.isEmpty {
             parent.submenu = submenu
             menu.addItem(parent)
         }
+        menu.addItem(makeMenuItem(for: .copyPath, invocationKind: invocationKind))
         
         logToSharedContainer("[FinderSync] 菜单渲染完毕，主菜单 Items 数量: \(menu.items.count)", level: .debug)
         // 若全部为空则不展示任何项

@@ -254,7 +254,7 @@ HOST_SOURCES="
     Sources/Contextory/Core/SharedFolderMonitor.swift \
     Sources/Contextory/Core/PendingActionConsumer.swift \
     Sources/Contextory/Core/ActionDispatcher.swift \
-    Sources/Contextory/Core/SharedHUDManager.swift \
+    Sources/Contextory/Core/SystemNotificationManager.swift \
     Sources/Contextory/Core/FullDiskAccessChecker.swift \
     Sources/Contextory/Core/LaunchServiceManager.swift \
     Sources/Contextory/Core/LaunchPresentationPolicy.swift \
@@ -263,6 +263,7 @@ HOST_SOURCES="
     Sources/Contextory/Core/SystemReloader.swift \
     Sources/Contextory/Core/PermissionRefreshCoordinator.swift \
     Sources/Contextory/Core/Actions/NewFileAction.swift \
+    Sources/Contextory/Core/Actions/CopyPathAction.swift \
     Sources/Contextory/Core/Logging/AppLog.swift \
     Sources/Contextory/Core/Distribution.swift
 "

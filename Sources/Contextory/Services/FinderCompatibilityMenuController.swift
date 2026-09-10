@@ -450,30 +450,30 @@ final class FinderCompatibilityMenuController: NSObject, NSMenuDelegate {
         let submenu = NSMenu(title: "新建文件")
         submenu.autoenablesItems = false
 
-        for action in FileActionDescriptor.all {
-            let item = NSMenuItem(
-                title: action.localizedTitle,
-                action: #selector(performCompatibilityAction(_:)),
-                keyEquivalent: ""
-            )
-            item.target = self
-            item.representedObject = CompatibilityMenuPayload(
-                actionId: action.actionId,
-                targetURL: targetURL
-            )
-            item.isEnabled = true
-            item.image = menuIcon(
-                named: action.iconName,
-                accessibilityDescription: action.localizedTitle
-            )
-            submenu.addItem(item)
+        for action in FileActionDescriptor.newFileActions {
+            submenu.addItem(makeMenuItem(for: action, targetURL: targetURL))
         }
 
         guard !submenu.items.isEmpty else { return menu }
         parent.submenu = submenu
         menu.addItem(parent)
+        menu.addItem(makeMenuItem(for: .copyPath, targetURL: targetURL))
 
         return menu
+    }
+
+    /// 新建文件与复制路径共用点击目标、图标和派发逻辑。
+    private func makeMenuItem(for action: FileActionDescriptor, targetURL: URL) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: action.localizedTitle,
+            action: #selector(performCompatibilityAction(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = CompatibilityMenuPayload(actionId: action.actionId, targetURL: targetURL)
+        item.isEnabled = true
+        item.image = menuIcon(named: action.iconName, accessibilityDescription: action.localizedTitle)
+        return item
     }
 
     private func menuIcon(

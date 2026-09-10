@@ -1,12 +1,12 @@
 import Foundation
 
-/// 内置动作的唯一清单。Host、FinderSync、设置页和测试均从这里取得相同实例集合。
+/// 宿主内置动作的注册清单；Finder 扩展只读取对应的 FileActionDescriptor。
 public enum DefaultActionRegistry {
     public static func makeActions() -> [MenuAction] {
         let commonActions: [MenuAction] = SupportedFileType.allCases.map {
             NewFileAction(fileType: $0)
         }
-        return commonActions + [OtherNewFileAction()]
+        return commonActions + [OtherNewFileAction(), CopyPathAction()]
     }
 
     @discardableResult

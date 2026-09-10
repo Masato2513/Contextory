@@ -2,9 +2,10 @@ import SwiftUI
 
 struct OverviewSettingsView: View {
     @EnvironmentObject private var session: SettingsSession
+    @ObservedObject private var notifications = SystemNotificationManager.shared
     @State private var isLaunchEnabled = false
     @State private var isSilentLaunchEnabled = true
-    @State private var showsSuccessHUD = false
+    @State private var showsSuccessNotifications = false
 
     private var launchEnabledBinding: Binding<Bool> {
         Binding(
@@ -13,7 +14,7 @@ struct OverviewSettingsView: View {
                 let previousValue = isLaunchEnabled
                 guard LaunchServiceManager.shared.setEnabled(newValue) else {
                     isLaunchEnabled = LaunchServiceManager.shared.isEnabled
-                    SharedHUDManager.show(
+                    SystemNotificationManager.show(
                         title: "自启设置失败",
                         content: "请前往系统设置检查登录项权限",
                         isSuccess: false
@@ -49,11 +50,28 @@ struct OverviewSettingsView: View {
                 ))
             }
 
-            SettingsSection("反馈") {
-                Toggle("显示成功提示", isOn: Binding(
-                    get: { showsSuccessHUD },
-                    set: saveSuccessHUD
+            SettingsSection("通知") {
+                Toggle("显示成功通知", isOn: Binding(
+                    get: { showsSuccessNotifications },
+                    set: saveSuccessNotifications
                 ))
+                Text("默认仅通知操作失败。通知不播放声音，并遵循系统通知设置和专注模式。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 12) {
+                    Text(notifications.authorizationSummary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Button(notifications.authorizationStatus == .notDetermined ? "允许通知…" : "通知设置…") {
+                        if notifications.authorizationStatus == .notDetermined {
+                            Task { await notifications.requestAuthorization() }
+                        } else {
+                            notifications.openSystemSettings()
+                        }
+                    }
+                    .disabled(notifications.isRequestingAuthorization)
+                }
             }
 
             SettingsSection("关于") {
@@ -78,13 +96,14 @@ struct OverviewSettingsView: View {
     }
 
     private func refresh() {
+        Task { await notifications.refreshAuthorization() }
         isLaunchEnabled = LaunchServiceManager.shared.isEnabled
         isSilentLaunchEnabled = SharedStorageManager.shared.getBool(
             forKey: LaunchPresentationPolicy.silentLaunchKey,
             defaultValue: true
         )
-        showsSuccessHUD = SharedStorageManager.shared.getBool(
-            forKey: SharedStorageManager.Keys.enableSuccessHUD,
+        showsSuccessNotifications = SharedStorageManager.shared.getBool(
+            forKey: SharedStorageManager.Keys.enableSuccessNotifications,
             defaultValue: false
         )
     }
@@ -100,14 +119,19 @@ struct OverviewSettingsView: View {
         isSilentLaunchEnabled = enabled
     }
 
-    private func saveSuccessHUD(_ enabled: Bool) {
+    private func saveSuccessNotifications(_ enabled: Bool) {
         guard SharedStorageManager.shared.setBool(
             enabled,
-            forKey: SharedStorageManager.Keys.enableSuccessHUD
+            forKey: SharedStorageManager.Keys.enableSuccessNotifications
         ) else {
             showConfigurationSaveFailure("成功提示")
             return
         }
-        showsSuccessHUD = enabled
+        showsSuccessNotifications = enabled
+        if enabled {
+            Task { await notifications.requestAuthorization() }
+        } else {
+            notifications.clearSuccessNotifications()
+        }
     }
 }

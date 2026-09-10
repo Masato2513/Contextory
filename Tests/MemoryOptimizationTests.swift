@@ -34,7 +34,7 @@ final class MemoryOptimizationTests: XCTestCase {
         XCTAssertEqual(FileActionDescriptor.all.map(\.actionId), actions.map(\.actionId))
         XCTAssertEqual(FileActionDescriptor.all.map(\.localizedTitle), actions.map(\.localizedTitle))
         XCTAssertEqual(FileActionDescriptor.all.map { Optional($0.iconName) }, actions.map(\.iconName))
-        XCTAssertEqual(Set(FileActionDescriptor.all.map(\.actionId)).count, 8)
+        XCTAssertEqual(Set(FileActionDescriptor.all.map(\.actionId)).count, 9)
     }
 
     func testBatchesLeaveUnclaimedEventsOnDiskAndDrainWithoutDuplicates() throws {

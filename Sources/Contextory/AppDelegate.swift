@@ -23,6 +23,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private lazy var pendingActionConsumer = PendingActionConsumer()
     
     func applicationWillFinishLaunching(_ notification: Notification) {
+        let notifications = SystemNotificationManager.shared
+        notifications.onFailureChanged = { [weak self] in self?.updateFailureIndicator() }
+        notifications.onNotificationOpened = { [weak self] in self?.showSettingsWindow() }
+        notifications.configure()
+
         guard let event = NSAppleEventManager.shared().currentAppleEvent,
               event.eventID == kAEOpenApplication else { return }
         launchedAsLoginItem = event.paramDescriptor(
@@ -36,7 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             return
         }
 
-        // 1. 初始化并注册固定的新建文件动作。
+        // 1. 初始化并注册内置文件动作。
         registerDefaultActions()
         // 在安装任意跨线程回调前初始化，避免 lazy 属性的首次访问竞态。
         _ = pendingActionConsumer
@@ -187,7 +192,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
     
     // MARK: - 系统菜单栏托盘管理
-    private func setupStatusItem() {
+    @MainActor private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = statusItem?.button else { return }
 
@@ -221,18 +226,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         menu.delegate = self
         rebuildStatusMenu(menu)
         statusItem?.menu = menu
+        updateFailureIndicator()
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
+    @MainActor private func updateFailureIndicator() {
+        guard let button = statusItem?.button else { return }
+        let failure = SystemNotificationManager.shared.latestFailure
+        button.title = failure != nil ? "!" : (button.image == nil ? "右" : "")
+        button.imagePosition = .imageLeading
+        button.toolTip = failure.map { "右键助手：\($0.title)，点击菜单查看详情" } ?? "右键助手"
+    }
+
+    @MainActor func menuNeedsUpdate(_ menu: NSMenu) {
         rebuildStatusMenu(menu)
     }
 
-    private func rebuildStatusMenu(_ menu: NSMenu) {
+    @MainActor private func rebuildStatusMenu(_ menu: NSMenu) {
         menu.removeAllItems()
 
         let settingsItem = NSMenuItem(title: "打开设置…", action: #selector(showSettingsWindow), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
+
+        if SystemNotificationManager.shared.latestFailure != nil {
+            let failureItem = NSMenuItem(title: "查看最近失败…", action: #selector(showSettingsWindow), keyEquivalent: "")
+            failureItem.target = self
+            failureItem.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: "操作失败")
+            menu.addItem(failureItem)
+        }
 
         menu.addItem(NSMenuItem.separator())
         
@@ -278,7 +299,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
 
         SystemReloader.postConfigChanged()
-        SharedHUDManager.show(
+        SystemNotificationManager.show(
             title: "正在刷新 Finder",
             content: "已重新打开右键助手，正在让 Finder 按新权限加载右键菜单",
             isSuccess: true
@@ -288,7 +309,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             let result = SystemReloader.restartFinder()
             DispatchQueue.main.async {
                 guard !result.isSuccess else { return }
-                SharedHUDManager.show(
+                SystemNotificationManager.show(
                     title: "Finder 重启失败",
                     content: result.errorDescription ?? "请手动重启 Finder 或重新登录后再试",
                     isSuccess: false
@@ -355,7 +376,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             forKey: LaunchPresentationPolicy.silentLaunchKey
         ) else {
             sender.state = isSilentLaunchEnabled ? .on : .off
-            SharedHUDManager.show(
+            SystemNotificationManager.show(
                 title: "设置保存失败",
                 content: "无法写入静默启动设置，请检查共享目录权限后重试。",
                 isSuccess: false
@@ -364,10 +385,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
         sender.state = newValue ? .on : .off
         settingsSession.refresh(afterChanges: true)
-        SharedHUDManager.show(
+        SystemNotificationManager.show(
             title: newValue ? "静默启动已启用" : "静默启动已关闭",
             content: newValue ? "后台拉起时仅保留菜单栏图标" : "下次启动会直接显示设置窗口",
-            iconName: newValue ? "moon.fill" : "macwindow",
             isSuccess: true
         )
     }
@@ -382,7 +402,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         右键助手 (Contextory)
         版本: v\(version)
         
-        仅提供本地新建文件能力，不包含联网与更新检查。
+        提供本地新建文件和复制路径功能，不包含联网与更新检查。
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "确定")

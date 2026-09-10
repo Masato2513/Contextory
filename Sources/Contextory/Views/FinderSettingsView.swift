@@ -305,7 +305,7 @@ struct PermissionsSettingsView: View {
     }
 
     private func relaunchAppAndRestartFinderAfterPermissionChange() {
-        SharedHUDManager.show(
+        SystemNotificationManager.show(
             title: "正在重新打开",
             content: "正在启动新进程，随后会让 Finder 按新权限刷新",
             isSuccess: true
@@ -316,7 +316,7 @@ struct PermissionsSettingsView: View {
             bundleURL: Bundle.main.bundleURL
         ) { outcome in
             guard outcome.isSuccess else {
-                SharedHUDManager.show(
+                SystemNotificationManager.show(
                     title: "重新打开失败",
                     content: outcome.relaunchResult?.errorDescription
                         ?? "请手动退出并重新打开右键助手，然后重启 Finder",
@@ -332,7 +332,7 @@ struct PermissionsSettingsView: View {
     }
 
     private func restartFinderAfterPermissionChange() {
-        SharedHUDManager.show(
+        SystemNotificationManager.show(
             title: "正在重启 Finder",
             content: "右键菜单会在 Finder 重新打开后按新权限刷新",
             isSuccess: true
@@ -343,7 +343,7 @@ struct PermissionsSettingsView: View {
             bundleURL: Bundle.main.bundleURL
         ) { outcome in
             if !outcome.isSuccess {
-                SharedHUDManager.show(
+                SystemNotificationManager.show(
                     title: "Finder 重启失败",
                     content: outcome.restartFinderResult?.errorDescription
                         ?? "请手动重启 Finder 或重新登录后再试",

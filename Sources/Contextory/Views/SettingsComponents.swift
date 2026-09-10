@@ -39,13 +39,13 @@ func makeRightClickMenuHealthSnapshot() -> RightClickMenuHealthSnapshot {
 
 func showFinderExtensionRegistrationOutcome(_ outcome: FinderExtensionRegistrationOutcome) {
     if outcome.isSuccess {
-        SharedHUDManager.show(
+        SystemNotificationManager.show(
             title: "注册成功",
             content: "Finder 已重启，右键菜单会按最新扩展状态加载",
             isSuccess: true
         )
     } else {
-        SharedHUDManager.show(
+        SystemNotificationManager.show(
             title: "注册失败",
             content: outcome.errorDescription ?? "请打开扩展设置手动启用右键助手扩展",
             isSuccess: false
@@ -54,10 +54,9 @@ func showFinderExtensionRegistrationOutcome(_ outcome: FinderExtensionRegistrati
 }
 
 func showConfigurationSaveFailure(_ settingName: String) {
-    SharedHUDManager.show(
+    SystemNotificationManager.show(
         title: "设置保存失败",
         content: "无法写入“\(settingName)”，原设置已保留。请检查共享目录权限后重试。",
-        iconName: "exclamationmark.triangle.fill",
         isSuccess: false
     )
 }
@@ -310,7 +309,7 @@ struct ExtensionStatusBanner: View {
             bundleURL: Bundle.main.bundleURL
         ) { outcome in
             isRepairRunning = false
-            SharedHUDManager.show(
+            SystemNotificationManager.show(
                 title: outcome.isSuccess ? "Finder 已重启" : "Finder 重启失败",
                 content: outcome.isSuccess
                     ? "右键菜单会按最新状态加载"
@@ -329,7 +328,7 @@ struct ExtensionStatusBanner: View {
         ) { outcome in
             isRepairRunning = false
             guard outcome.isSuccess else {
-                SharedHUDManager.show(
+                SystemNotificationManager.show(
                     title: "重新打开失败",
                     content: outcome.relaunchResult?.errorDescription ?? "请手动重新打开右键助手",
                     isSuccess: false

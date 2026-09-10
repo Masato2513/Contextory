@@ -87,16 +87,19 @@ public final class ActionDispatcher: @unchecked Sendable {
             return nil
         }
 
-        let healthyURLs = targetURLs.filter { url in
-            FileManager.default.fileExists(atPath: url.path)
-        }
-        if action.requiresExistingTargets && healthyURLs.isEmpty {
-            print("[Dispatcher] 错误: 动作需要的目标路径已不存在")
-            SharedHUDManager.show(title: "操作无效", content: "目标项目在磁盘上已不存在", isSuccess: false)
-            return nil
+        let finalURLs: [URL]
+        if action.requiresExistingTargets {
+            finalURLs = targetURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+            guard !finalURLs.isEmpty else {
+                print("[Dispatcher] 错误: 动作需要的目标路径已不存在")
+                SystemNotificationManager.show(title: "操作无效", content: "目标项目在磁盘上已不存在", isSuccess: false)
+                return nil
+            }
+        } else {
+            // 复制路径等纯元数据动作不探测文件是否已下载或可读。
+            finalURLs = targetURLs
         }
 
-        let finalURLs = action.requiresExistingTargets ? healthyURLs : targetURLs
         guard action.isAvailable(
             for: finalURLs,
             isContainer: invocationKind == .container

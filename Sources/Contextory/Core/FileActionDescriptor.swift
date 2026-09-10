@@ -40,7 +40,7 @@ public enum SupportedFileType: String, CaseIterable, Codable, Identifiable, Send
 
 }
 
-/// Finder 菜单只需要这些值；执行器、HUD 与文件模板仅由宿主加载。
+/// Finder 菜单只需要这些值；执行器、通知与文件模板仅由宿主加载。
 public struct FileActionDescriptor: Equatable, Sendable {
     public let actionId: String
     public let localizedTitle: String
@@ -51,7 +51,13 @@ public struct FileActionDescriptor: Equatable, Sendable {
         localizedTitle: "其他…",
         iconName: "doc.badge.plus"
     )
-    public static let all = SupportedFileType.allCases.map { Self(fileType: $0) } + [other]
+    public static let copyPath = FileActionDescriptor(
+        actionId: "io.github.masato2513.Contextory.action.copy-path",
+        localizedTitle: "复制路径",
+        iconName: "doc.on.clipboard"
+    )
+    public static let newFileActions = SupportedFileType.allCases.map { Self(fileType: $0) } + [other]
+    public static let all = newFileActions + [copyPath]
 
     public init(fileType: SupportedFileType) {
         actionId = "io.github.masato2513.Contextory.action.newfile.\(fileType.rawValue)"

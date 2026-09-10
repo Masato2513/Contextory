@@ -26,6 +26,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 }
 
 public struct ContentView: View {
+    @ObservedObject private var notifications = SystemNotificationManager.shared
     @State private var selectedTab: SidebarItem = .overview
     @EnvironmentObject private var session: SettingsSession
 
@@ -67,6 +68,29 @@ public struct ContentView: View {
                 .padding(.vertical, 14)
 
                 Divider()
+
+                if let failure = notifications.latestFailure {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(failure.title).fontWeight(.semibold)
+                            Text(failure.detail)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        Spacer(minLength: 8)
+                        Button("关闭", systemImage: "xmark") {
+                            notifications.clearFailure()
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.plain)
+                        .help("清除最近一次失败提示")
+                    }
+                    .font(.system(size: 13))
+                    .padding(16)
+                    Divider()
+                }
 
                 detailContent
             }

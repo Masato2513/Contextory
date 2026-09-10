@@ -99,8 +99,8 @@ public final class SharedStorageManager: @unchecked Sendable {
 
     public enum Keys {
         public static let enableDebugLogging = "enable_debug_logging"
-        /// 文件创建等成功操作的 HUD 提示；错误提示不受此开关影响。
-        public static let enableSuccessHUD = "enable_success_hud"
+        /// 操作成功的系统通知；复用旧存储键以保留已有偏好，错误通知不受此开关影响。
+        public static let enableSuccessNotifications = "enable_success_hud"
         /// 宿主 App 提供的独立 Finder 兼容菜单；不影响 FinderSync 扩展本身。
         public static let finderCompatibilityMenuEnabled = "finder_compatibility_menu_enabled"
         public static let watchedDirectoryPaths = "watched_directory_paths"

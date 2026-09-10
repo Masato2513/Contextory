@@ -160,7 +160,7 @@ struct DiagnosticsSettingsView: View {
             bundleURL: Bundle.main.bundleURL
         ) { outcome in
             isRepairRunning = false
-            SharedHUDManager.show(
+            SystemNotificationManager.show(
                 title: outcome.isSuccess ? "Finder 已重启" : "Finder 重启失败",
                 content: outcome.isSuccess
                     ? "右键菜单会按最新状态加载"
@@ -179,7 +179,7 @@ struct DiagnosticsSettingsView: View {
         ) { outcome in
             isRepairRunning = false
             guard outcome.isSuccess else {
-                SharedHUDManager.show(
+                SystemNotificationManager.show(
                     title: "重新打开失败",
                     content: outcome.relaunchResult?.errorDescription ?? "请手动退出并重新打开右键助手",
                     isSuccess: false
@@ -209,12 +209,12 @@ struct DiagnosticsSettingsView: View {
     private func copyToPasteboard(_ value: String, title: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
-        SharedHUDManager.show(title: title, content: "可直接粘贴使用", isSuccess: true)
+        SystemNotificationManager.show(title: title, content: "可直接粘贴使用", isSuccess: true)
     }
 
     private func openConsole() {
         guard FileManager.default.fileExists(atPath: Self.consoleURL.path) else {
-            SharedHUDManager.show(
+            SystemNotificationManager.show(
                 title: "无法打开 Console",
                 content: "系统未找到 Console.app",
                 isSuccess: false
@@ -231,10 +231,10 @@ struct DiagnosticsSettingsView: View {
     private func clearFailedActions() {
         do {
             try SharedStorageManager.shared.clearFailedActions()
-            SharedHUDManager.show(title: "失败动作已清空", content: "动作队列状态已刷新", isSuccess: true)
+            SystemNotificationManager.show(title: "失败动作已清空", content: "动作队列状态已刷新", isSuccess: true)
             refresh()
         } catch {
-            SharedHUDManager.show(
+            SystemNotificationManager.show(
                 title: "清空失败",
                 content: error.localizedDescription,
                 isSuccess: false

@@ -142,7 +142,7 @@ public final class NewFileAction: MenuAction, @unchecked Sendable {
 
         if fileType == .docx || fileType == .xlsx || fileType == .pptx {
             guard fileData.starts(with: Data([0x50, 0x4B])) else {
-                SharedHUDManager.show(
+                SystemNotificationManager.show(
                     title: "模板不可用",
                     content: "未找到有效的 \(fileType.extensionName.uppercased()) 模板，未创建文件",
                     isSuccess: false
@@ -210,7 +210,7 @@ public final class OtherNewFileAction: MenuAction, @unchecked Sendable {
 
         guard alert.runModal() == .alertFirstButtonReturn else { return .cancelled }
         guard let fileName = NewFileCreator.normalizedCustomFileName(input.stringValue) else {
-            SharedHUDManager.show(
+            SystemNotificationManager.show(
                 title: "文件名无效",
                 content: "请输入不包含 / 或 : 的完整文件名",
                 isSuccess: false
@@ -218,7 +218,7 @@ public final class OtherNewFileAction: MenuAction, @unchecked Sendable {
             return .failed
         }
         guard !NewFileCreator.requiresStructuredTemplate(fileName) else {
-            SharedHUDManager.show(
+            SystemNotificationManager.show(
                 title: "需要有效模板",
                 content: "Office 和 PDF 请使用菜单中的专用创建项",
                 isSuccess: false
@@ -245,16 +245,16 @@ private func createAndReveal(
             requestedName: requestedName,
             data: data
         )
-        SharedHUDManager.show(
+        SystemNotificationManager.show(
             title: "新建成功",
-            content: "已生成并高亮：\(finalURL.lastPathComponent)",
+            content: finalURL.lastPathComponent,
             isSuccess: true
         )
         NewFileRevealer.reveal(finalURL)
         return true
     } catch {
         AppLog.error("创建文件失败：\(error.localizedDescription)", category: .action)
-        SharedHUDManager.show(
+        SystemNotificationManager.show(
             title: "新建失败",
             content: "请检查目录写入权限",
             isSuccess: false

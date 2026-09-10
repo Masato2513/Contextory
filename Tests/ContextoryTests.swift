@@ -31,7 +31,8 @@ final class ContextoryTests: XCTestCase {
             "io.github.masato2513.Contextory.action.newfile.xlsx",
             "io.github.masato2513.Contextory.action.newfile.pptx",
             "io.github.masato2513.Contextory.action.newfile.pdf",
-            "io.github.masato2513.Contextory.action.newfile.other"
+            "io.github.masato2513.Contextory.action.newfile.other",
+            "io.github.masato2513.Contextory.action.copy-path"
         ])
         XCTAssertEqual(actions.map(\.localizedTitle), [
             "文本文件 (.txt)",
@@ -41,7 +42,8 @@ final class ContextoryTests: XCTestCase {
             "Excel 表格 (.xlsx)",
             "PowerPoint 演示文稿 (.pptx)",
             "PDF 文档 (.pdf)",
-            "其他…"
+            "其他…",
+            "复制路径"
         ])
     }
 
