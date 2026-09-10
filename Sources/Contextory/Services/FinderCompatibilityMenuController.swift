@@ -462,7 +462,7 @@ final class FinderCompatibilityMenuController: NSObject, NSMenuDelegate {
         return menu
     }
 
-    /// 新建文件与复制路径共用点击目标、图标和派发逻辑。
+    /// 新建文件与拷贝路径共用点击目标、图标和派发逻辑。
     private func makeMenuItem(for action: FileActionDescriptor, targetURL: URL) -> NSMenuItem {
         let item = NSMenuItem(
             title: action.localizedTitle,

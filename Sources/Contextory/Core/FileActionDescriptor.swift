@@ -53,8 +53,8 @@ public struct FileActionDescriptor: Equatable, Sendable {
     )
     public static let copyPath = FileActionDescriptor(
         actionId: "io.github.masato2513.Contextory.action.copy-path",
-        localizedTitle: "复制路径",
-        iconName: "doc.on.clipboard"
+        localizedTitle: "拷贝路径",
+        iconName: "point.topleft.down.to.point.bottomright.curvepath"
     )
     public static let newFileActions = SupportedFileType.allCases.map { Self(fileType: $0) } + [other]
     public static let all = newFileActions + [copyPath]

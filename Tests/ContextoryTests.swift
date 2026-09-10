@@ -43,7 +43,7 @@ final class ContextoryTests: XCTestCase {
             "PowerPoint 演示文稿 (.pptx)",
             "PDF 文档 (.pdf)",
             "其他…",
-            "复制路径"
+            "拷贝路径"
         ])
     }
 

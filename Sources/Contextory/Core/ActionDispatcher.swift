@@ -96,7 +96,7 @@ public final class ActionDispatcher: @unchecked Sendable {
                 return nil
             }
         } else {
-            // 复制路径等纯元数据动作不探测文件是否已下载或可读。
+            // 拷贝路径等纯元数据动作不探测文件是否已下载或可读。
             finalURLs = targetURLs
         }
 

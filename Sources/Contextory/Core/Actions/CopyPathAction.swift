@@ -45,15 +45,15 @@ public final class CopyPathAction: MenuAction, @unchecked Sendable {
         pasteboard.clearContents()
         guard pasteboard.setString(text, forType: .string) else {
             SystemNotificationManager.show(
-                title: "复制路径失败",
+                title: "拷贝路径失败",
                 content: "无法写入剪贴板，请重试。",
                 isSuccess: false
             )
             return false
         }
         SystemNotificationManager.show(
-            title: "路径已复制",
-            content: targetURLs.count == 1 ? text : "已复制 \(targetURLs.count) 个项目的路径",
+            title: "路径已拷贝",
+            content: targetURLs.count == 1 ? text : "已拷贝 \(targetURLs.count) 个项目的路径",
             isSuccess: true
         )
         return true

@@ -402,7 +402,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         右键助手 (Contextory)
         版本: v\(version)
         
-        提供本地新建文件和复制路径功能，不包含联网与更新检查。
+        提供本地新建文件和拷贝路径功能，不包含联网与更新检查。
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "确定")
