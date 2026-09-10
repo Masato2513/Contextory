@@ -53,17 +53,27 @@ public final class SystemNotificationManager: NSObject, ObservableObject, UNUser
     }
 
     public func refreshAuthorization() async {
-        let settings = await center.notificationSettings()
-        authorizationStatus = settings.authorizationStatus
-        switch settings.authorizationStatus {
+        // 旧 SDK 的 UNNotificationSettings 不符合 Sendable；在系统回调内读取，
+        // 仅将不可变值传回主线程，兼容 CI 的 Swift 6 严格并发检查。
+        let settings: (authorization: Int, alertsEnabled: Bool, listEnabled: Bool) = await withCheckedContinuation { continuation in
+            center.getNotificationSettings { settings in
+                continuation.resume(returning: (
+                    settings.authorizationStatus.rawValue,
+                    settings.alertSetting == .enabled,
+                    settings.notificationCenterSetting == .enabled
+                ))
+            }
+        }
+        authorizationStatus = UNAuthorizationStatus(rawValue: settings.authorization) ?? .notDetermined
+        switch authorizationStatus {
         case .notDetermined:
             authorizationSummary = "尚未授权；允许后可接收操作失败通知。"
         case .denied:
             authorizationSummary = "通知已关闭；操作失败仍可在菜单栏和此处查看。"
         case .authorized, .provisional, .ephemeral:
-            if settings.alertSetting == .enabled {
+            if settings.alertsEnabled {
                 authorizationSummary = "已允许系统通知，展示方式由系统通知设置决定。"
-            } else if settings.notificationCenterSetting == .enabled {
+            } else if settings.listEnabled {
                 authorizationSummary = "通知会保留在通知中心，横幅已关闭。"
             } else {
                 authorizationSummary = "系统已关闭通知展示；操作失败仍可在菜单栏和此处查看。"
