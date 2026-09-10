@@ -92,7 +92,16 @@ public final class SystemNotificationManager: NSObject, ObservableObject, UNUser
         isRequestingAuthorization = true
         let task = Task { @MainActor in
             do {
-                _ = try await center.requestAuthorization(options: [.alert])
+                // 通过回调桥接异步结果，通知中心对象始终在主线程访问。
+                let _: Bool = try await withCheckedThrowingContinuation { continuation in
+                    center.requestAuthorization(options: [.alert]) { granted, error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume(returning: granted)
+                        }
+                    }
+                }
                 await refreshAuthorization()
             } catch {
                 await refreshAuthorization()
@@ -150,7 +159,15 @@ public final class SystemNotificationManager: NSObject, ObservableObject, UNUser
         // 不请求声音或角标权限；同类通知只保留最新一条，避免频繁操作堆积记录。
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         do {
-            try await center.add(request)
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                center.add(request) { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume(returning: ())
+                    }
+                }
+            }
         } catch {
             authorizationSummary = "通知未能发送，请在系统设置中检查。"
             SharedStorageManager.shared.writeLog("[通知] 投递失败：\(error.localizedDescription)", level: .error)
